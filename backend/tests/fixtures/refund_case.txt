@@ -1,0 +1,20 @@
+AIRLINE REFUND CASE
+
+Passenger: Alex Morgan
+Booking reference: ABC123
+Airline: Example Airways
+
+Flight cancellation date: August 1, 2026
+
+The airline cancelled the scheduled flight.
+The passenger paid ¥120,000 for the booking.
+The passenger has not received the refund as of August 20, 2026.
+
+Requested resolution:
+Refund the full ¥120,000 to the original payment method.
+
+Supporting facts:
+- Booking reference: ABC123
+- Amount paid: ¥120,000
+- Cancellation: Confirmed by airline
+- Refund received: No

@@ -1,0 +1,469 @@
+{
+  "configuration": {
+    "apiVersion": "2026-05-25",
+    "engine": {
+      "requestedEngineVersion": "stable"
+    },
+    "maxLanguages": 2,
+    "maxScripts": 2,
+    "mode": "understand",
+    "outputFormat": "spatial"
+  },
+  "metrics": {
+    "pagesProcessed": 1,
+    "processingTimeMs": 1417
+  },
+  "output": {
+    "elements": [
+      {
+        "bounds": {
+          "height": 39.08304,
+          "width": 375.23264,
+          "x": 192.86514,
+          "y": 156.91696
+        },
+        "cells": null,
+        "confidence": 0.8387812,
+        "id": "a304835a-eeb6-42d2-8ac1-9c29b6d2ad2d",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            192.86514,
+            156.91696
+          ],
+          [
+            568.0978,
+            156.91696
+          ],
+          [
+            568.0978,
+            196
+          ],
+          [
+            192.86514,
+            196
+          ]
+        ],
+        "readingOrder": 0,
+        "role": "Text",
+        "text": "AIRLINE REFUND CASE",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 146.46689,
+          "width": 412.52344,
+          "x": 194.31691,
+          "y": 269.76324
+        },
+        "cells": null,
+        "confidence": 0.80193996,
+        "id": "a499b8ae-6502-42b6-86ef-7b8525dd1b5c",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            194.31691,
+            269.76324
+          ],
+          [
+            606.84033,
+            269.76324
+          ],
+          [
+            606.84033,
+            416.23013
+          ],
+          [
+            194.31691,
+            416.23013
+          ]
+        ],
+        "readingOrder": 1,
+        "role": "Text",
+        "text": "Passenger: Alex Morgan\nBooking reference: ABC123",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 36,
+          "width": 363,
+          "x": 194,
+          "y": 388
+        },
+        "cells": null,
+        "confidence": 1,
+        "id": "2e62040b-87fe-4688-a30b-4406a214839f",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            194,
+            388
+          ],
+          [
+            557,
+            388
+          ],
+          [
+            557,
+            424
+          ],
+          [
+            194,
+            424
+          ]
+        ],
+        "readingOrder": 2,
+        "role": "Text",
+        "text": "Airline: Example Airways",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 44.005646,
+          "width": 583.5087,
+          "x": 194.64116,
+          "y": 490.99435
+        },
+        "cells": null,
+        "confidence": 0.80385834,
+        "id": "cd97f311-4fdb-41cc-b02e-84bd81696412",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            194.64116,
+            490.99435
+          ],
+          [
+            778.1499,
+            490.99435
+          ],
+          [
+            778.1499,
+            535
+          ],
+          [
+            194.64116,
+            535
+          ]
+        ],
+        "readingOrder": 3,
+        "role": "Text",
+        "text": "Flight cancellation date: August 1, 2026",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 154.59375,
+          "width": 981.97186,
+          "x": 193.13167,
+          "y": 602.40625
+        },
+        "cells": null,
+        "confidence": 0.8050542,
+        "id": "0393a02b-bf11-4a6b-93ec-24479aa15574",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            193.13167,
+            602.40625
+          ],
+          [
+            1175.1035,
+            602.40625
+          ],
+          [
+            1175.1035,
+            757
+          ],
+          [
+            193.13167,
+            757
+          ]
+        ],
+        "readingOrder": 4,
+        "role": "Text",
+        "text": "The airline cancelled the scheduled flight.\nThe passenger paid Y120,000 for the booking.\nThe passenger has not received the refund as of August 20, 2026.",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 99.91547,
+          "width": 842.69275,
+          "x": 194.7571,
+          "y": 824.08453
+        },
+        "cells": null,
+        "confidence": 0.76605713,
+        "id": "d73fc870-9355-46a0-9deb-a72cda4be1a5",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            194.7571,
+            824.08453
+          ],
+          [
+            1037.4498,
+            824.08453
+          ],
+          [
+            1037.4498,
+            924
+          ],
+          [
+            194.7571,
+            924
+          ]
+        ],
+        "readingOrder": 5,
+        "role": "Text",
+        "text": "Requested resolution:\nRefund the full Y120,000 to the original payment method.",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 42.34265,
+          "width": 250.15106,
+          "x": 194,
+          "y": 991.65735
+        },
+        "cells": null,
+        "confidence": 0.6943639,
+        "id": "41d2a67c-5142-4623-90db-a18c932a9fd6",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            194,
+            991.65735
+          ],
+          [
+            444.15106,
+            991.65735
+          ],
+          [
+            444.15106,
+            1034
+          ],
+          [
+            194,
+            1034
+          ]
+        ],
+        "readingOrder": 6,
+        "role": "Text",
+        "text": "Supporting facts:",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 43.20923,
+          "width": 433.8298,
+          "x": 193.37473,
+          "y": 1046.7908
+        },
+        "cells": null,
+        "confidence": 0.6667388,
+        "id": "b07f6c29-ae95-4008-aa6b-eec0fde456a2",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            193.37473,
+            1046.7908
+          ],
+          [
+            627.2045,
+            1046.7908
+          ],
+          [
+            627.2045,
+            1090
+          ],
+          [
+            193.37473,
+            1090
+          ]
+        ],
+        "readingOrder": 7,
+        "role": "ListItem",
+        "text": "- Booking reference: ABC123",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 42.61731,
+          "width": 370.69983,
+          "x": 192.45659,
+          "y": 1103.3827
+        },
+        "cells": null,
+        "confidence": 0.67827314,
+        "id": "33be45dc-e016-4803-9b06-6fc3aa53d861",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            192.45659,
+            1103.3827
+          ],
+          [
+            563.15643,
+            1103.3827
+          ],
+          [
+            563.15643,
+            1146
+          ],
+          [
+            192.45659,
+            1146
+          ]
+        ],
+        "readingOrder": 8,
+        "role": "ListItem",
+        "text": "- Amount paid: Y120,000",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 43.52942,
+          "width": 520.60925,
+          "x": 192.20135,
+          "y": 1157.4706
+        },
+        "cells": null,
+        "confidence": 0.70456314,
+        "id": "bce3a555-feb2-4744-a3ea-dc0c1534dc8d",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            192.20135,
+            1157.4706
+          ],
+          [
+            712.8106,
+            1157.4706
+          ],
+          [
+            712.8106,
+            1201
+          ],
+          [
+            192.20135,
+            1201
+          ]
+        ],
+        "readingOrder": 9,
+        "role": "ListItem",
+        "text": "- Cancellation: Confirmed by airline",
+        "type": "paragraph"
+      },
+      {
+        "bounds": {
+          "height": 37.66626,
+          "width": 325.81445,
+          "x": 192.9752,
+          "y": 1213.3337
+        },
+        "cells": null,
+        "confidence": 0.6932644,
+        "id": "0dea39b0-93d8-4416-b0b2-ad0db40cd0ba",
+        "page": {
+          "height": 2339,
+          "pageIndex": 0,
+          "pageNumber": 1,
+          "width": 1654
+        },
+        "points": [
+          [
+            192.9752,
+            1213.3337
+          ],
+          [
+            518.7897,
+            1213.3337
+          ],
+          [
+            518.7897,
+            1251
+          ],
+          [
+            192.9752,
+            1251
+          ]
+        ],
+        "readingOrder": 10,
+        "role": "ListItem",
+        "text": "- Refund received: No",
+        "type": "paragraph"
+      }
+    ],
+    "languageDetection": {
+      "pages": [
+        {
+          "languages": [
+            "eng",
+            "deu"
+          ],
+          "pageNumber": 1,
+          "textDirection": "lrtb"
+        }
+      ]
+    }
+  },
+  "requestId": "GM19eTUo1gYMaIoAAKih",
+  "status": 200,
+  "usage": {
+    "data_extraction_credits": {
+      "cost": 9.0,
+      "remainingCredits": 4982.0
+    }
+  }
+}
