@@ -1,7 +1,7 @@
 import json
 
 from app.db.database import SessionLocal
-from app.models.case import Case as CaseModel
+from app.models.case import Case as CaseModel, CaseActivity
 from app.services.case_parser import Case as ParsedCase
 from app.services.case_persistence import persist_parsed_case
 
@@ -41,6 +41,18 @@ def test_persist_parsed_case():
         assert stored is not None
         assert stored.passenger == "Alex Morgan"
         assert stored.status.value == "CREATED"
+
+        activities = (
+            db.query(CaseActivity)
+            .filter(CaseActivity.case_id == case.id)
+            .all()
+        )
+
+        assert len(activities) == 1
+        assert activities[0].event_type == "CASE_CREATED"
+        assert activities[0].message == (
+            "Case created from submitted evidence."
+        )
 
     finally:
         db.close()

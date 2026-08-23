@@ -3,6 +3,7 @@ import json
 from sqlalchemy.orm import Session
 
 from app.models.case import Case as CaseModel
+from app.services.case_activity import record_activity
 from app.services.case_parser import Case as ParsedCase
 
 
@@ -36,5 +37,12 @@ def persist_parsed_case(
     db.add(case)
     db.commit()
     db.refresh(case)
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type="CASE_CREATED",
+        message="Case created from submitted evidence.",
+    )
 
     return case
