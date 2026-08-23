@@ -9,6 +9,7 @@ from app.db.database import Base, engine, get_db
 from app.integrations.nutrient import NutrientError, parse_document
 from app.models.case import Case, CaseStatus
 from app.services.case_parser import parse_case
+from app.services.case_persistence import persist_parsed_case
 
 
 Base.metadata.create_all(bind=engine)
@@ -101,6 +102,60 @@ def get_case(
             "updated_at": case.updated_at,
         },
     }
+
+
+
+@router.post("/parse-and-create")
+async def parse_and_create_case(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A file is required.")
+
+    suffix = Path(file.filename).suffix or ".bin"
+
+    try:
+        with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(await file.read())
+            temp_path = Path(temp_file.name)
+
+        try:
+            nutrient_response = await parse_document(
+                temp_path,
+                mode="understand",
+                output_format="spatial",
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        parsed_case = parse_case(nutrient_response)
+        case = persist_parsed_case(db, parsed_case)
+
+        return {
+            "status": "ok",
+            "case": {
+                "id": case.id,
+                "passenger": case.passenger,
+                "booking_reference": case.booking_reference,
+                "airline": case.airline,
+                "cancellation_date": case.cancellation_date,
+                "amount": case.amount,
+                "refund_received": case.refund_received,
+                "requested_resolution": case.requested_resolution,
+                "supporting_facts": parsed_case.supporting_facts,
+                "status": case.status,
+            },
+        }
+
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    except NutrientError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/parse")

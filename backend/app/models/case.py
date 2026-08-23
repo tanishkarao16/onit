@@ -1,13 +1,12 @@
 from datetime import datetime
-from enum import Enum
 
-from sqlalchemy import DateTime, Enum as SQLEnum, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
 
 
-class CaseStatus(str, Enum):
+class CaseStatus(str, __import__("enum").Enum):
     CREATED = "CREATED"
     ANALYZING = "ANALYZING"
     EVIDENCE_READY = "EVIDENCE_READY"
@@ -27,11 +26,31 @@ class Case(Base):
     __tablename__ = "cases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text)
+
+    passenger: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    booking_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     organization: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    airline: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    cancellation_date: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     amount: Mapped[str | None] = mapped_column(String(100), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    refund_received: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    requested_resolution: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    supporting_facts: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
 
     status: Mapped[CaseStatus] = mapped_column(
         SQLEnum(CaseStatus),
