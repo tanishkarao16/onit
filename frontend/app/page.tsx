@@ -1,31 +1,27 @@
-const cases = [
-  {
-    title: "Flight cancellation",
-    organization: "ANA",
-    amount: "¥120,000",
-    status: "Action ready",
-    time: "2m ago",
-    priority: "high",
-  },
-  {
-    title: "Insurance claim",
-    organization: "Sompo",
-    amount: "¥84,500",
-    status: "Researching",
-    time: "18m ago",
-    priority: "medium",
-  },
-  {
-    title: "Hotel refund",
-    organization: "Booking",
-    amount: "¥32,000",
-    status: "Resolved",
-    time: "Yesterday",
-    priority: "low",
-  },
-];
+"use client";
 
-function StatusDot({ priority }: { priority: string }) {
+import { useEffect, useState } from "react";
+
+type CaseItem = {
+  id: number;
+  title: string;
+  description: string;
+  organization: string | null;
+  amount: string | null;
+  currency: string | null;
+  status: string;
+};
+
+const API_URL = "http://127.0.0.1:8000";
+
+function StatusDot({ status }: { status: string }) {
+  const priority =
+    status === "ACTION_READY" || status === "AWAITING_APPROVAL"
+      ? "high"
+      : status === "RESOLVED" || status === "CLOSED"
+        ? "low"
+        : "medium";
+
   return (
     <span
       className={`h-2 w-2 rounded-full ${
@@ -39,7 +35,47 @@ function StatusDot({ priority }: { priority: string }) {
   );
 }
 
+function formatStatus(status: string) {
+  return status
+    .toLowerCase()
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 export default function Home() {
+  const [cases, setCases] = useState<CaseItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    async function loadCases() {
+      try {
+        const response = await fetch(`${API_URL}/cases`);
+
+        if (!response.ok) {
+          throw new Error("Failed to load cases");
+        }
+
+        const data = await response.json();
+        setCases(data.cases ?? []);
+      } catch {
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadCases();
+  }, []);
+
+  const actionCases = cases.filter(
+    (item) =>
+      item.status === "ACTION_READY" ||
+      item.status === "AWAITING_APPROVAL",
+  );
+
+  const featuredCase = actionCases[0];
+
   return (
     <main className="min-h-screen bg-[#f7f7f5] text-[#171717]">
       <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-6 py-8 md:px-10">
@@ -96,45 +132,71 @@ export default function Home() {
               </p>
 
               <p className="mt-1 text-sm text-[#73736e]">
-                ONIT prepared something for you.
+                {featuredCase
+                  ? "ONIT prepared something for you."
+                  : "Nothing needs your attention right now."}
               </p>
             </div>
 
             <span className="rounded-full bg-[#171717] px-3 py-1.5 text-xs font-medium text-white">
-              1 case
+              {actionCases.length}{" "}
+              {actionCases.length === 1 ? "case" : "cases"}
             </span>
           </div>
 
-          <button className="group w-full rounded-2xl border border-black/8 bg-white p-6 text-left shadow-[0_8px_30px_rgba(0,0,0,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_40px_rgba(0,0,0,0.07)]">
-            <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
-              <div>
-                <div className="flex items-center gap-2">
-                  <StatusDot priority="high" />
+          {featuredCase ? (
+            <button className="group w-full rounded-2xl border border-black/8 bg-white p-6 text-left shadow-[0_8px_30px_rgba(0,0,0,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_40px_rgba(0,0,0,0.07)]">
+              <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <StatusDot status={featuredCase.status} />
 
-                  <span className="text-xs font-medium uppercase tracking-[0.12em] text-[#8a8a86]">
-                    Flight cancellation
-                  </span>
+                    <span className="text-xs font-medium uppercase tracking-[0.12em] text-[#8a8a86]">
+                      {featuredCase.title}
+                    </span>
+                  </div>
+
+                  <h2 className="mt-3 text-2xl font-semibold tracking-tight">
+                    {featuredCase.amount
+                      ? `${featuredCase.amount} from ${
+                          featuredCase.organization ?? "the organization"
+                        }`
+                      : featuredCase.title}
+                  </h2>
+
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-[#73736e]">
+                    {featuredCase.description}
+                  </p>
                 </div>
 
-                <h2 className="mt-3 text-2xl font-semibold tracking-tight">
-                  Refund ¥120,000 from ANA
-                </h2>
+                <div className="flex shrink-0 items-center gap-3">
+                  <span className="text-sm font-medium">Review</span>
 
-                <p className="mt-2 max-w-xl text-sm leading-6 text-[#73736e]">
-                  The cancellation evidence has been analyzed and the
-                  refund request is ready for your approval.
-                </p>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full border border-black/10 transition group-hover:bg-[#171717] group-hover:text-white">
+                    →
+                  </span>
+                </div>
               </div>
+            </button>
+          ) : (
+            <div className="rounded-2xl border border-black/8 bg-white p-8 text-center shadow-[0_8px_30px_rgba(0,0,0,0.03)]">
+              <p className="text-sm font-medium">
+                {loading
+                  ? "Checking your cases..."
+                  : error
+                    ? "ONIT couldn't reach the case engine."
+                    : "No cases need your attention yet."}
+              </p>
 
-              <div className="flex shrink-0 items-center gap-3">
-                <span className="text-sm font-medium">Review</span>
-
-                <span className="flex h-9 w-9 items-center justify-center rounded-full border border-black/10 transition group-hover:bg-[#171717] group-hover:text-white">
-                  →
-                </span>
-              </div>
+              <p className="mt-2 text-sm text-[#8a8a86]">
+                {loading
+                  ? "ONIT is connecting to your workspace."
+                  : error
+                    ? "Make sure the ONIT backend is running."
+                    : "Give ONIT a problem to work on."}
+              </p>
             </div>
-          </button>
+          )}
         </section>
 
         {/* Recent cases */}
@@ -146,44 +208,51 @@ export default function Home() {
           </div>
 
           <div className="overflow-hidden rounded-2xl border border-black/8 bg-white">
-            {cases.map((item, index) => (
-              <button
-                key={item.title}
-                className={`group flex w-full items-center justify-between gap-4 px-5 py-5 text-left transition hover:bg-[#fafaf8] ${
-                  index !== cases.length - 1
-                    ? "border-b border-black/6"
-                    : ""
-                }`}
-              >
-                <div className="flex min-w-0 items-center gap-4">
-                  <StatusDot priority={item.priority} />
+            {loading ? (
+              <div className="px-5 py-8 text-sm text-[#8a8a86]">
+                Loading cases...
+              </div>
+            ) : cases.length === 0 ? (
+              <div className="px-5 py-8 text-sm text-[#8a8a86]">
+                No cases yet.
+              </div>
+            ) : (
+              cases.map((item, index) => (
+                <button
+                  key={item.id}
+                  className={`group flex w-full items-center justify-between gap-4 px-5 py-5 text-left transition hover:bg-[#fafaf8] ${
+                    index !== cases.length - 1
+                      ? "border-b border-black/6"
+                      : ""
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-4">
+                    <StatusDot status={item.status} />
 
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">
-                      {item.title}
-                    </p>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">
+                        {item.title}
+                      </p>
 
-                    <p className="mt-1 text-xs text-[#8a8a86]">
-                      {item.organization} · {item.amount}
-                    </p>
+                      <p className="mt-1 text-xs text-[#8a8a86]">
+                        {item.organization ?? "Unknown organization"}
+                        {item.amount ? ` · ${item.amount}` : ""}
+                      </p>
+                    </div>
                   </div>
-                </div>
 
-                <div className="flex shrink-0 items-center gap-5">
-                  <span className="hidden text-xs text-[#73736e] sm:block">
-                    {item.status}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-5">
+                    <span className="hidden text-xs text-[#73736e] sm:block">
+                      {formatStatus(item.status)}
+                    </span>
 
-                  <span className="text-xs text-[#a0a09b]">
-                    {item.time}
-                  </span>
-
-                  <span className="text-[#a0a09b] transition group-hover:translate-x-1 group-hover:text-[#171717]">
-                    →
-                  </span>
-                </div>
-              </button>
-            ))}
+                    <span className="text-[#a0a09b] transition group-hover:translate-x-1 group-hover:text-[#171717]">
+                      →
+                    </span>
+                  </div>
+                </button>
+              ))
+            )}
           </div>
         </section>
 
