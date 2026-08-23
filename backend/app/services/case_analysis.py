@@ -3,6 +3,7 @@ import json
 from sqlalchemy.orm import Session
 
 from app.models.case import Case as CaseModel, CaseStatus
+from app.services.case_activity import record_activity
 from app.services.case_decision import CaseDecision, decide_case
 from app.services.case_parser import Case as ParsedCase
 
@@ -11,6 +12,16 @@ def analyze_case(
     db: Session,
     case: CaseModel,
 ) -> CaseDecision:
+    case.status = CaseStatus.ANALYZING
+    db.commit()
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type="ANALYSIS_STARTED",
+        message="ONIT started analyzing the case.",
+    )
+
     parsed_case = ParsedCase(
         passenger=case.passenger,
         booking_reference=case.booking_reference,
@@ -22,8 +33,6 @@ def analyze_case(
         supporting_facts=json.loads(case.supporting_facts or "[]"),
     )
 
-    case.status = CaseStatus.ANALYZING
-
     decision = decide_case(parsed_case)
 
     case.issue = decision.issue
@@ -34,5 +43,15 @@ def analyze_case(
 
     db.commit()
     db.refresh(case)
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type="ANALYSIS_COMPLETED",
+        message=(
+            f"ONIT identified: {decision.issue}. "
+            f"Recommended action: {decision.recommended_action}."
+        ),
+    )
 
     return decision

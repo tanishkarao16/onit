@@ -172,3 +172,57 @@ def test_analyze_case_endpoint_persists_decision():
         "Request the full refund from the airline"
     )
     assert data["case"]["priority"] == "high"
+
+
+def test_case_activity_endpoint():
+    from app.db.database import SessionLocal
+    from app.models.case import Case as CaseModel, CaseActivity, CaseStatus
+
+    db = SessionLocal()
+
+    try:
+        case = CaseModel(
+            title="Activity test case",
+            description="Testing case timeline.",
+            status=CaseStatus.CREATED,
+        )
+
+        db.add(case)
+        db.commit()
+        db.refresh(case)
+
+        db.add(
+            CaseActivity(
+                case_id=case.id,
+                event_type="ANALYSIS_STARTED",
+                message="ONIT started analyzing the case.",
+            )
+        )
+        db.add(
+            CaseActivity(
+                case_id=case.id,
+                event_type="ANALYSIS_COMPLETED",
+                message="ONIT completed analysis.",
+            )
+        )
+        db.commit()
+
+        response = client.get(
+            f"/cases/{case.id}/activity"
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert data["status"] == "ok"
+        assert len(data["activities"]) == 2
+        assert data["activities"][0]["event_type"] == (
+            "ANALYSIS_STARTED"
+        )
+        assert data["activities"][1]["event_type"] == (
+            "ANALYSIS_COMPLETED"
+        )
+
+    finally:
+        db.close()

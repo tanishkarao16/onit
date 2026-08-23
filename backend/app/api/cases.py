@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.db.database import Base, engine, get_db
 from app.integrations.nutrient import NutrientError, parse_document
-from app.models.case import Case, CaseStatus
-from app.services.case_parser import parse_case
+from app.models.case import Case, CaseActivity, CaseStatus
 from app.services.case_analysis import analyze_case
+from app.services.case_parser import parse_case
 from app.services.case_persistence import persist_parsed_case
 
 
@@ -79,6 +79,42 @@ def list_cases(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/{case_id}/activity")
+def get_case_activity(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    activities = (
+        db.query(CaseActivity)
+        .filter(CaseActivity.case_id == case_id)
+        .order_by(
+            CaseActivity.created_at.asc(),
+            CaseActivity.id.asc(),
+        )
+        .all()
+    )
+
+    return {
+        "status": "ok",
+        "activities": [
+            {
+                "id": activity.id,
+                "event_type": activity.event_type,
+                "message": activity.message,
+                "created_at": activity.created_at,
+            }
+            for activity in activities
+        ],
+    }
+
 
 @router.post("/{case_id}/analyze")
 def analyze_case_endpoint(
@@ -88,7 +124,10 @@ def analyze_case_endpoint(
     case = db.get(Case, case_id)
 
     if case is None:
-        raise HTTPException(status_code=404, detail="Case not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
 
     decision = analyze_case(db, case)
 
@@ -119,7 +158,10 @@ def get_case(
     case = db.get(Case, case_id)
 
     if case is None:
-        raise HTTPException(status_code=404, detail="Case not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
 
     return {
         "status": "ok",
@@ -137,69 +179,23 @@ def get_case(
     }
 
 
-
-@router.post("/parse-and-create")
-async def parse_and_create_case(
+@router.post("/parse")
+async def parse_case_document(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
 ):
     if not file.filename:
-        raise HTTPException(status_code=400, detail="A file is required.")
-
-    suffix = Path(file.filename).suffix or ".bin"
-
-    try:
-        with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-            temp_file.write(await file.read())
-            temp_path = Path(temp_file.name)
-
-        try:
-            nutrient_response = await parse_document(
-                temp_path,
-                mode="understand",
-                output_format="spatial",
-            )
-        finally:
-            temp_path.unlink(missing_ok=True)
-
-        parsed_case = parse_case(nutrient_response)
-        case = persist_parsed_case(db, parsed_case)
-
-        return {
-            "status": "ok",
-            "case": {
-                "id": case.id,
-                "passenger": case.passenger,
-                "booking_reference": case.booking_reference,
-                "airline": case.airline,
-                "cancellation_date": case.cancellation_date,
-                "amount": case.amount,
-                "refund_received": case.refund_received,
-                "requested_resolution": case.requested_resolution,
-                "supporting_facts": parsed_case.supporting_facts,
-                "status": case.status,
-            },
-        }
-
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    except NutrientError as exc:
         raise HTTPException(
-            status_code=502,
-            detail=str(exc),
-        ) from exc
-
-
-@router.post("/parse")
-async def parse_case_document(file: UploadFile = File(...)):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="A file is required.")
+            status_code=400,
+            detail="A file is required.",
+        )
 
     suffix = Path(file.filename).suffix or ".bin"
 
     try:
-        with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        with NamedTemporaryFile(
+            delete=False,
+            suffix=suffix,
+        ) as temp_file:
             temp_file.write(await file.read())
             temp_path = Path(temp_file.name)
 
@@ -229,7 +225,72 @@ async def parse_case_document(file: UploadFile = File(...)):
         }
 
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except NutrientError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/parse-and-create")
+async def parse_and_create_case(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="A file is required.",
+        )
+
+    suffix = Path(file.filename).suffix or ".bin"
+
+    try:
+        with NamedTemporaryFile(
+            delete=False,
+            suffix=suffix,
+        ) as temp_file:
+            temp_file.write(await file.read())
+            temp_path = Path(temp_file.name)
+
+        try:
+            nutrient_response = await parse_document(
+                temp_path,
+                mode="understand",
+                output_format="spatial",
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        parsed_case = parse_case(nutrient_response)
+        case = persist_parsed_case(db, parsed_case)
+
+        return {
+            "status": "ok",
+            "case": {
+                "id": case.id,
+                "passenger": case.passenger,
+                "booking_reference": case.booking_reference,
+                "airline": case.airline,
+                "cancellation_date": case.cancellation_date,
+                "amount": case.amount,
+                "refund_received": case.refund_received,
+                "requested_resolution": case.requested_resolution,
+                "supporting_facts": case.supporting_facts,
+                "status": case.status,
+            },
+        }
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
 
     except NutrientError as exc:
         raise HTTPException(
