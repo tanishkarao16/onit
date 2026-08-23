@@ -9,6 +9,7 @@ from app.db.database import Base, engine, get_db
 from app.integrations.nutrient import NutrientError, parse_document
 from app.models.case import Case, CaseStatus
 from app.services.case_parser import parse_case
+from app.services.case_analysis import analyze_case
 from app.services.case_persistence import persist_parsed_case
 
 
@@ -75,6 +76,38 @@ def list_cases(db: Session = Depends(get_db)):
             }
             for case in cases
         ],
+    }
+
+
+
+@router.post("/{case_id}/analyze")
+def analyze_case_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    decision = analyze_case(db, case)
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "status": case.status,
+            "issue": case.issue,
+            "recommended_action": case.recommended_action,
+            "priority": case.priority,
+            "decision_reason": case.decision_reason,
+        },
+        "decision": {
+            "issue": decision.issue,
+            "recommended_action": decision.recommended_action,
+            "priority": decision.priority,
+            "reason": decision.reason,
+        },
     }
 
 

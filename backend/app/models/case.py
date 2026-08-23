@@ -52,6 +52,11 @@ class Case(Base):
         nullable=True,
     )
 
+    issue: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recommended_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     status: Mapped[CaseStatus] = mapped_column(
         SQLEnum(CaseStatus),
         default=CaseStatus.CREATED,
