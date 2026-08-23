@@ -1,4 +1,3 @@
-cat > .gitignore <<'EOF'
 # Environment
 .env
 .env.*
@@ -37,4 +36,3 @@ htmlcov/
 
 # Logs
 *.log
-EOF
