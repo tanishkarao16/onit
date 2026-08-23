@@ -1,13 +1,106 @@
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.db.database import Base, engine, get_db
 from app.integrations.nutrient import NutrientError, parse_document
+from app.models.case import Case, CaseStatus
 from app.services.case_parser import parse_case
 
 
+Base.metadata.create_all(bind=engine)
+
 router = APIRouter(prefix="/cases", tags=["cases"])
+
+
+class CreateCaseRequest(BaseModel):
+    title: str
+    description: str
+    organization: str | None = None
+    amount: str | None = None
+    currency: str | None = None
+
+
+@router.post("")
+def create_case(
+    request: CreateCaseRequest,
+    db: Session = Depends(get_db),
+):
+    case = Case(
+        title=request.title,
+        description=request.description,
+        organization=request.organization,
+        amount=request.amount,
+        currency=request.currency,
+        status=CaseStatus.CREATED,
+    )
+
+    db.add(case)
+    db.commit()
+    db.refresh(case)
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "title": case.title,
+            "description": case.description,
+            "organization": case.organization,
+            "amount": case.amount,
+            "currency": case.currency,
+            "status": case.status,
+        },
+    }
+
+
+@router.get("")
+def list_cases(db: Session = Depends(get_db)):
+    cases = db.query(Case).order_by(Case.created_at.desc()).all()
+
+    return {
+        "status": "ok",
+        "cases": [
+            {
+                "id": case.id,
+                "title": case.title,
+                "description": case.description,
+                "organization": case.organization,
+                "amount": case.amount,
+                "currency": case.currency,
+                "status": case.status,
+            }
+            for case in cases
+        ],
+    }
+
+
+@router.get("/{case_id}")
+def get_case(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "title": case.title,
+            "description": case.description,
+            "organization": case.organization,
+            "amount": case.amount,
+            "currency": case.currency,
+            "status": case.status,
+            "created_at": case.created_at,
+            "updated_at": case.updated_at,
+        },
+    }
 
 
 @router.post("/parse")
