@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 
 from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -6,7 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.database import Base
 
 
-class CaseStatus(str, __import__("enum").Enum):
+class CaseStatus(str, Enum):
     CREATED = "CREATED"
     ANALYZING = "ANALYZING"
     EVIDENCE_READY = "EVIDENCE_READY"
@@ -166,6 +167,48 @@ class CaseActivity(Base):
     )
 
     message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class CaseResearch(Base):
+    __tablename__ = "case_research"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    case_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    source: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    summary: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    relevance: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
