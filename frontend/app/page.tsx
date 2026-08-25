@@ -50,7 +50,6 @@ export default function Home() {
   // The API call is intentionally performed in an effect because it
   // synchronizes this client component with the ONIT case engine.
   // React 19's lint rule flags the resulting state updates.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     async function loadCases() {
       try {
