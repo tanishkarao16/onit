@@ -10,8 +10,10 @@ from app.integrations.nutrient import NutrientError, parse_document
 from app.models.case import Case, CaseActivity, CaseResearch, CaseStatus
 from app.services.case_analysis import analyze_case
 from app.services.case_approval import request_case_approval
+from app.services.case_decision import CaseDecision
 from app.services.case_parser import parse_case
 from app.services.case_persistence import persist_parsed_case
+from app.services.case_planning import plan_case
 from app.services.case_research import research_case
 
 
@@ -61,8 +63,14 @@ def create_case(
 
 
 @router.get("")
-def list_cases(db: Session = Depends(get_db)):
-    cases = db.query(Case).order_by(Case.created_at.desc()).all()
+def list_cases(
+    db: Session = Depends(get_db),
+):
+    cases = (
+        db.query(Case)
+        .order_by(Case.created_at.desc())
+        .all()
+    )
 
     return {
         "status": "ok",
@@ -170,7 +178,16 @@ def analyze_case_endpoint(
             detail="Case not found.",
         )
 
-    decision = analyze_case(db, case)
+    try:
+        decision = analyze_case(
+            db=db,
+            case=case,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
 
     return {
         "status": "ok",
@@ -230,6 +247,59 @@ def research_case_endpoint(
             }
             for result in results
         ],
+    }
+
+
+@router.post("/{case_id}/plan")
+def plan_case_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    if not case.issue or not case.recommended_action:
+        raise HTTPException(
+            status_code=400,
+            detail="Case must be analyzed before planning.",
+        )
+
+    decision = CaseDecision(
+        issue=case.issue,
+        recommended_action=case.recommended_action,
+        priority=case.priority or "MEDIUM",
+        reason=case.decision_reason or "",
+    )
+
+    try:
+        plan = plan_case(
+            db=db,
+            case=case,
+            decision=decision,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "status": case.status,
+            "approval_required": case.approval_required,
+        },
+        "plan": {
+            "summary": plan.summary,
+            "steps": plan.steps,
+            "approval_required": plan.approval_required,
+        },
     }
 
 
@@ -400,7 +470,10 @@ async def parse_and_create_case(
             temp_path.unlink(missing_ok=True)
 
         parsed_case = parse_case(nutrient_response)
-        case = persist_parsed_case(db, parsed_case)
+        case = persist_parsed_case(
+            db,
+            parsed_case,
+        )
 
         return {
             "status": "ok",
