@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.db.database import Base, engine, get_db
 from app.integrations.nutrient import NutrientError, parse_document
-from app.models.case import Case, CaseActivity, CaseStatus
+from app.models.case import Case, CaseActivity, CaseResearch, CaseStatus
 from app.services.case_analysis import analyze_case
+from app.services.case_approval import request_case_approval
 from app.services.case_parser import parse_case
 from app.services.case_persistence import persist_parsed_case
+from app.services.case_research import research_case
 
 
 Base.metadata.create_all(bind=engine)
@@ -116,6 +118,45 @@ def get_case_activity(
     }
 
 
+@router.get("/{case_id}/research")
+def get_case_research(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    research = (
+        db.query(CaseResearch)
+        .filter(CaseResearch.case_id == case_id)
+        .order_by(
+            CaseResearch.created_at.asc(),
+            CaseResearch.id.asc(),
+        )
+        .all()
+    )
+
+    return {
+        "status": "ok",
+        "research": [
+            {
+                "id": item.id,
+                "source": item.source,
+                "title": item.title,
+                "summary": item.summary,
+                "relevance": item.relevance,
+                "created_at": item.created_at,
+            }
+            for item in research
+        ],
+    }
+
+
 @router.post("/{case_id}/analyze")
 def analyze_case_endpoint(
     case_id: int,
@@ -150,6 +191,83 @@ def analyze_case_endpoint(
     }
 
 
+@router.post("/{case_id}/research")
+def research_case_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    try:
+        results = research_case(
+            db=db,
+            case=case,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "status": case.status,
+        },
+        "research": [
+            {
+                "source": result.source,
+                "title": result.title,
+                "summary": result.summary,
+                "relevance": result.relevance,
+            }
+            for result in results
+        ],
+    }
+
+
+@router.post("/{case_id}/request-approval")
+def request_case_approval_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    try:
+        case = request_case_approval(
+            db=db,
+            case=case,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "status": case.status,
+            "recommended_action": case.recommended_action,
+            "approval_required": case.approval_required,
+        },
+    }
+
+
 @router.get("/{case_id}")
 def get_case(
     case_id: int,
@@ -169,9 +287,23 @@ def get_case(
             "id": case.id,
             "title": case.title,
             "description": case.description,
+            "passenger": case.passenger,
+            "booking_reference": case.booking_reference,
             "organization": case.organization,
+            "airline": case.airline,
+            "cancellation_date": case.cancellation_date,
             "amount": case.amount,
             "currency": case.currency,
+            "refund_received": case.refund_received,
+            "requested_resolution": case.requested_resolution,
+            "supporting_facts": case.supporting_facts,
+            "issue": case.issue,
+            "recommended_action": case.recommended_action,
+            "priority": case.priority,
+            "decision_reason": case.decision_reason,
+            "plan_summary": case.plan_summary,
+            "plan_steps": case.plan_steps,
+            "approval_required": case.approval_required,
             "status": case.status,
             "created_at": case.created_at,
             "updated_at": case.updated_at,
