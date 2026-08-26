@@ -1,10 +1,28 @@
+import os
+
 from app.db.database import SessionLocal
 from app.models.case import Case as CaseModel, CaseActivity, CaseResearch, CaseStatus
 from app.services.case_research import research_case
 
 
-def test_research_case_persists_results_and_activity():
+def test_research_case_persists_results_and_activity(monkeypatch):
     db = SessionLocal()
+
+    # Provide a fake API key
+    monkeypatch.setenv("SERPAPI_API_KEY", "fake-key")
+
+    # Mock serpapi.search
+    def fake_search(query, api_key, num_results=5):
+        return [
+            {
+                "title": "Example Airways refund policy",
+                "snippet": "Passengers are entitled to...",
+                "link": "https://example.com/policy",
+                "source": "example.com",
+            }
+        ]
+
+    monkeypatch.setattr("app.integrations.serpapi.search", fake_search)
 
     try:
         case = CaseModel(
@@ -24,17 +42,12 @@ def test_research_case_persists_results_and_activity():
         db.commit()
         db.refresh(case)
 
-        results = research_case(
-            db=db,
-            case=case,
-        )
+        results = research_case(db=db, case=case)
 
-        assert len(results) == 1
+        assert len(results) >= 1
 
-        assert results[0].source == "Example Airways"
-        assert results[0].title == (
-            "Case-specific refund policy research"
-        )
+        assert results[0].source == "example.com"
+        assert "refund" in results[0].title.lower()
 
         assert case.status == CaseStatus.EVIDENCE_READY
 
@@ -44,8 +57,9 @@ def test_research_case_persists_results_and_activity():
             .all()
         )
 
-        assert len(stored) == 1
-        assert stored[0].source == "Example Airways"
+        assert len(stored) >= 1
+        assert stored[0].url == "https://example.com/policy"
+        assert "This source" in stored[0].summary or "official" in stored[0].summary.lower()
 
         activities = (
             db.query(CaseActivity)

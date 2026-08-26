@@ -19,6 +19,19 @@ from app.services.case_research import research_case
 
 Base.metadata.create_all(bind=engine)
 
+# Ensure `url` column exists on `case_research` table when model adds it.
+with engine.connect() as conn:
+    try:
+        res = conn.execute(
+            "PRAGMA table_info(case_research)"
+        ).fetchall()
+        cols = {row[1] for row in res}
+        if "url" not in cols:
+            conn.execute("ALTER TABLE case_research ADD COLUMN url VARCHAR(2048)")
+    except Exception:
+        # Non-fatal: leave existing schema as-is if pragma/alter fail
+        pass
+
 router = APIRouter(prefix="/cases", tags=["cases"])
 
 

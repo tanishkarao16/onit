@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type CaseItem = {
   id: number;
@@ -46,6 +47,17 @@ export default function Home() {
   const [cases, setCases] = useState<CaseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const router = useRouter();
+
+  // New case modal state
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [organization, setOrganization] = useState<string | null>(null);
+  const [amount, setAmount] = useState<string | null>(null);
+  const [currency, setCurrency] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [apiErrorMsg, setApiErrorMsg] = useState<string | null>(null);
 
   // The API call is intentionally performed in an effect because it
   // synchronizes this client component with the ONIT case engine.
@@ -72,6 +84,69 @@ export default function Home() {
 
     loadCases();
   }, []);
+
+  async function refreshCases() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/cases`);
+      const d = await res.json();
+      setCases(d.cases ?? []);
+      setError(false);
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+
+    setApiErrorMsg(null);
+
+    if (!title.trim() || !description.trim()) {
+      setApiErrorMsg("Title and description are required.");
+      return;
+    }
+
+    const payload = {
+      title: title.trim(),
+      description: description.trim(),
+      organization: organization?.trim() || null,
+      amount: amount?.trim() || null,
+      currency: amount && !currency ? "JPY" : currency || null,
+    };
+
+    setCreating(true);
+
+    try {
+      const res = await fetch(`${API_URL}/cases`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || "Failed to create case");
+      }
+
+      // created successfully
+      setIsModalOpen(false);
+      setTitle("");
+      setDescription("");
+      setOrganization(null);
+      setAmount(null);
+      setCurrency(null);
+
+      await refreshCases();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setApiErrorMsg(msg);
+    } finally {
+      setCreating(false);
+    }
+  }
 
   const actionCases = cases.filter(
     (item) =>
@@ -150,7 +225,10 @@ export default function Home() {
           </div>
 
           {featuredCase ? (
-            <button className="group w-full rounded-2xl border border-black/8 bg-white p-6 text-left shadow-[0_8px_30px_rgba(0,0,0,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_40px_rgba(0,0,0,0.07)]">
+            <button
+              onClick={() => router.push(`/cases/${featuredCase.id}`)}
+              className="group w-full rounded-2xl border border-black/8 bg-white p-6 text-left shadow-[0_8px_30px_rgba(0,0,0,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_40px_rgba(0,0,0,0.07)]"
+            >
               <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
                 <div>
                   <div className="flex items-center gap-2">
@@ -225,6 +303,7 @@ export default function Home() {
               cases.map((item, index) => (
                 <button
                   key={item.id}
+                  onClick={() => router.push(`/cases/${item.id}`)}
                   className={`group flex w-full items-center justify-between gap-4 px-5 py-5 text-left transition hover:bg-[#fafaf8] ${
                     index !== cases.length - 1
                       ? "border-b border-black/6"
@@ -263,11 +342,101 @@ export default function Home() {
 
         {/* New case */}
         <div className="mt-8 flex justify-end">
-          <button className="flex items-center gap-2 rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white transition hover:bg-[#30302d]">
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center gap-2 rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white transition hover:bg-[#30302d]"
+          >
             <span className="text-lg leading-none">+</span>
             New case
           </button>
         </div>
+
+        {/* Modal */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="mx-4 w-full max-w-xl rounded-xl bg-white p-6">
+              <h3 className="text-lg font-semibold">Create new case</h3>
+
+              <form onSubmit={handleCreate} className="mt-4 space-y-4">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-[#6b6b66]">Title</label>
+                  <input
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    required
+                    className="w-full rounded-md border px-3 py-2 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-[#6b6b66]">Description</label>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    required
+                    rows={4}
+                    className="w-full rounded-md border px-3 py-2 text-sm"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-[#6b6b66]">Organization</label>
+                    <input
+                      value={organization ?? ""}
+                      onChange={(e) => setOrganization(e.target.value || null)}
+                      className="w-full rounded-md border px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-[#6b6b66]">Amount</label>
+                    <input
+                      value={amount ?? ""}
+                      onChange={(e) => setAmount(e.target.value || null)}
+                      className="w-full rounded-md border px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-[#6b6b66]">Currency</label>
+                  <input
+                    value={currency ?? ""}
+                    onChange={(e) => setCurrency(e.target.value || null)}
+                    placeholder={amount ? "JPY" : undefined}
+                    className="w-40 rounded-md border px-3 py-2 text-sm"
+                  />
+                </div>
+
+                {apiErrorMsg && (
+                  <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    {apiErrorMsg}
+                  </div>
+                )}
+
+                <div className="mt-2 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsModalOpen(false)}
+                    className="rounded-md px-4 py-2 text-sm"
+                    disabled={creating}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="rounded-md bg-[#171717] px-4 py-2 text-sm font-medium text-white"
+                    disabled={creating}
+                  >
+                    {creating ? "Creating…" : "Create case"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <footer className="mt-10 border-t border-black/6 py-6 text-xs text-[#a0a09b]">
