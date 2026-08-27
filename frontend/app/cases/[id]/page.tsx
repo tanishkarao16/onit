@@ -43,6 +43,17 @@ type ResearchItem = {
   title: string;
   summary: string;
   relevance: string;
+  url?: string | null;
+  created_at: string;
+};
+
+type EvidenceItem = {
+  id: number;
+  filename: string | null;
+  evidence_type: string | null;
+  mimetype: string | null;
+  extraction_status: string | null;
+  extracted_facts: Record<string, unknown> | null;
   created_at: string;
 };
 
@@ -117,9 +128,11 @@ export default function CasePage() {
   const [caseItem, setCaseItem] = useState<CaseItem | null>(null);
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [research, setResearch] = useState<ResearchItem[]>([]);
+  const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState("");
+  const [uploadLoading, setUploadLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,10 +147,12 @@ export default function CasePage() {
           caseResponse,
           activityResponse,
           researchResponse,
+          evidenceResponse,
         ] = await Promise.all([
           fetch(`${API_URL}/cases/${caseId}`),
           fetch(`${API_URL}/cases/${caseId}/activity`),
           fetch(`${API_URL}/cases/${caseId}/research`),
+          fetch(`${API_URL}/cases/${caseId}/evidence`),
         ]);
 
         if (!caseResponse.ok) {
@@ -147,6 +162,7 @@ export default function CasePage() {
         const caseData = await caseResponse.json();
         const activityData = await activityResponse.json();
         const researchData = await researchResponse.json();
+        const evidenceData = await evidenceResponse.json();
 
         if (cancelled) {
           return;
@@ -155,6 +171,7 @@ export default function CasePage() {
         setCaseItem(caseData.case);
         setActivities(activityData.activities ?? []);
         setResearch(researchData.research ?? []);
+        setEvidence(evidenceData.evidence ?? []);
         setError("");
         setLoading(false);
       } catch (err) {
@@ -188,10 +205,12 @@ export default function CasePage() {
         caseResponse,
         activityResponse,
         researchResponse,
+        evidenceResponse,
       ] = await Promise.all([
         fetch(`${API_URL}/cases/${caseId}`),
         fetch(`${API_URL}/cases/${caseId}/activity`),
         fetch(`${API_URL}/cases/${caseId}/research`),
+        fetch(`${API_URL}/cases/${caseId}/evidence`),
       ]);
 
       if (!caseResponse.ok) {
@@ -201,10 +220,12 @@ export default function CasePage() {
       const caseData = await caseResponse.json();
       const activityData = await activityResponse.json();
       const researchData = await researchResponse.json();
+      const evidenceData = await evidenceResponse.json();
 
       setCaseItem(caseData.case);
       setActivities(activityData.activities ?? []);
       setResearch(researchData.research ?? []);
+      setEvidence(evidenceData.evidence ?? []);
     } catch (err) {
       setError(
         err instanceof Error
@@ -283,6 +304,45 @@ export default function CasePage() {
       );
     } finally {
       setActionLoading(false);
+    }
+  }
+
+  async function uploadEvidence(file: File | null, text?: string) {
+    if (!caseItem) return;
+
+    try {
+      setUploadLoading(true);
+      setError("");
+
+      const form = new FormData();
+
+      if (file) {
+        form.append("file", file, file.name);
+      } else if (text) {
+        form.append("text", text);
+      } else {
+        throw new Error("No file or text provided");
+      }
+
+      const resp = await fetch(`${API_URL}/cases/${caseItem.id}/evidence`, {
+        method: "POST",
+        body: form,
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        throw new Error(data.detail || "Upload failed");
+      }
+
+      await refreshCase();
+      // fetch evidence list
+      const ev = await (await fetch(`${API_URL}/cases/${caseItem.id}/evidence`)).json();
+      setEvidence(ev.evidence ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadLoading(false);
     }
   }
 
@@ -508,17 +568,120 @@ export default function CasePage() {
         </section>
 
         {/* Evidence */}
-        {caseItem.supporting_facts && (
-          <section className="mt-12">
-            <SectionLabel>EVIDENCE</SectionLabel>
+        <section className="mt-12">
+          <SectionLabel>EVIDENCE</SectionLabel>
 
-            <div className="mt-4 rounded-2xl border border-black/8 bg-white p-6">
-              <p className="whitespace-pre-line text-sm leading-7 text-[#595955]">
-                {caseItem.supporting_facts}
+          <div className="mt-4 flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm text-[#8a8a86]">
+                Uploaded evidence and extracted facts.
               </p>
+
+              <div className="flex items-center gap-3">
+                <label className="relative inline-flex cursor-pointer items-center">
+                  <input
+                    type="file"
+                    className="sr-only"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      if (f) uploadEvidence(f);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+
+                  <span className="rounded-full border border-black/8 bg-white px-4 py-2 text-sm font-medium">
+                    {uploadLoading ? "Uploading..." : "Add evidence"}
+                  </span>
+                </label>
+              </div>
             </div>
-          </section>
-        )}
+
+            {evidence.length === 0 ? (
+              // fallback to any supporting_facts text if available
+              (caseItem.supporting_facts && (
+                <div className="rounded-2xl border border-black/8 bg-white p-6">
+                  <p className="whitespace-pre-line text-sm leading-7 text-[#595955]">
+                    {caseItem.supporting_facts}
+                  </p>
+                </div>
+              )) || (
+                <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
+                  <p className="text-sm font-medium">
+                    No supporting evidence has been added yet.
+                  </p>
+
+                    <p className="mt-2 text-sm leading-6 text-[#8a8a86]">
+                    Use the Add evidence button to upload a document or paste text.
+                  </p>
+                </div>
+              )
+            ) : (
+              <div className="mt-2 space-y-4">
+                {evidence.map((ev) => (
+                  <div
+                    key={ev.id}
+                    className="rounded-2xl border border-black/8 bg-white p-6"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold">
+                          {ev.filename ?? (ev.evidence_type ?? "Text input")}
+                        </p>
+
+                        <p className="mt-2 text-xs text-[#8a8a86]">
+                          {ev.evidence_type ? ev.evidence_type.toUpperCase() : "TEXT"} · {ev.mimetype ?? "-"}
+                        </p>
+                      </div>
+
+                      <div className="text-right text-xs text-[#a0a09b]">
+                        {formatDate(ev.created_at)}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      {ev.extracted_facts ? (
+                        Object.entries(ev.extracted_facts).map(([k, v]) => {
+                          const display = Array.isArray(v)
+                            ? (v as string[]).join("; ")
+                            : v == null
+                              ? "—"
+                              : String(v);
+
+                          return (
+                            <div key={k} className="rounded-md bg-[#f7f7f5] p-3">
+                              <p className="text-xs text-[#8a8a86]">{k.replaceAll("_", " ")}</p>
+                              <p className="mt-1 text-sm text-[#454542]">{display}</p>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="rounded-md bg-[#f7f7f5] p-3">
+                          <p className="text-sm text-[#595955]">No extracted facts.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 flex items-center gap-3">
+                      <span className="rounded-full bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                        {ev.extraction_status ?? "UNKNOWN"}
+                      </span>
+
+                      {ev.extracted_facts && typeof ev.extracted_facts === "object" && ev.extracted_facts !== null && ("booking_reference" in ev.extracted_facts) && !!(ev.extracted_facts as Record<string, unknown>)["booking_reference"] && (
+                        <a
+                          href={`#`}
+                          onClick={(e) => e.preventDefault()}
+                          className="ml-auto text-sm font-medium text-[#171717]"
+                        >
+                          View source
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
 
         {/* Analysis */}
         {(caseItem.issue ||

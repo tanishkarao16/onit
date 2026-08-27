@@ -51,6 +51,7 @@ def _build_queries(case: CaseModel) -> List[str]:
 
     # Prefer airline-focused authoritative queries
     airline = case.airline or case.organization
+    airline_lower = (airline or "").lower()
     if airline and not is_generic(airline):
         queries.append(f"{airline} cancelled flight refund policy")
         queries.append(f"{airline} refund policy passenger rights")
@@ -107,6 +108,7 @@ def research_case(
 
     queries = _build_queries(case)
     airline = case.airline or case.organization
+    airline_lower = (airline or "").lower()
 
     results: List[ResearchResult] = []
 
@@ -125,14 +127,14 @@ def research_case(
                 lnk = (link or "").lower()
                 if lnk and any(k in lnk for k in [".gov", ".gov.", "gov."]):
                     relevance = "high"
-                elif airline and airline.lower() in lnk:
+                elif airline_lower and airline_lower in lnk:
                     relevance = "high"
 
                 # Explain why the source matters
                 why = ""
                 if "gov" in (source or "") or (link and ".gov" in link):
                     why = "This is an official government or regulator source describing passenger rights or guidance."
-                elif airline and airline.lower() in (source or "") or (link and airline.lower() in (link or "")):
+                elif (airline_lower and airline_lower in (source or "")) or (link and airline_lower and airline_lower in (link or "")):
                     why = "This source appears to be the airline's official policy or published guidance."
                 else:
                     why = "This source provides news or guidance relevant to refunds and passenger rights."
@@ -157,13 +159,55 @@ def research_case(
             if len(results) >= 5:
                 break
 
-        # persist
-        for idx, r in enumerate(results):
+        # deduplicate results list itself (same URL or same source+title across queries)
+        seen_urls_run = set()
+        seen_pairs_run = set()
+        unique_results = []
+        for r in results:
+            if r.url:
+                if r.url in seen_urls_run:
+                    continue
+                seen_urls_run.add(r.url)
+            else:
+                pair = (r.source or "", r.title or "")
+                if pair in seen_pairs_run:
+                    continue
+                seen_pairs_run.add(pair)
+            unique_results.append(r)
+
+        # persist with idempotency: avoid inserting duplicates for same case
+        # gather existing persisted keys (url preferred, fallback to source+title)
+        existing = (
+            db.query(CaseResearch)
+            .filter(CaseResearch.case_id == case.id)
+            .all()
+        )
+
+        existing_urls = set()
+        existing_pairs = set()
+        for e in existing:
+            if e.url:
+                existing_urls.add(e.url)
+            else:
+                existing_pairs.add((e.source or "", e.title or ""))
+
+        for idx, r in enumerate(unique_results):
             # try to capture URL from the original serpapi result stored in local loop
             # The serpapi.search returns dicts and we persisted link earlier in local items
             # We didn't store link on ResearchResult to keep backward compatibility, so read from serpapi again is not ideal.
             # Instead, attempt to read link from items by re-running a quick search for the title — but that's costly.
             # To preserve simplicity, if the original item had 'link' it was assigned to ResearchResult via local scope: modify search call to include link by adding attribute to ResearchResult.
+            # dedupe: prefer URL when present
+            if r.url:
+                if r.url in existing_urls:
+                    continue
+                existing_urls.add(r.url)
+            else:
+                pair = (r.source or "", r.title or "")
+                if pair in existing_pairs:
+                    continue
+                existing_pairs.add(pair)
+
             db.add(
                 CaseResearch(
                     case_id=case.id,
@@ -184,11 +228,11 @@ def research_case(
             case_id=case.id,
             event_type="RESEARCH_COMPLETED",
             message=(
-                f"ONIT completed research and found {len(results)} relevant source(s)."
+                f"ONIT completed research and found {len(unique_results)} relevant source(s)."
             ),
         )
 
-        return results
+        return unique_results
 
     except Exception as exc:
         # record failure and surface a ValueError for API layer handling
