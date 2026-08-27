@@ -72,7 +72,8 @@ def plan_case(
     case.plan_summary = plan.summary
     case.plan_steps = json.dumps(plan.steps)
     case.approval_required = plan.approval_required
-    case.status = CaseStatus.ACTION_READY
+    # Transition depending on whether approval is required
+    case.status = CaseStatus.ACTION_READY if not plan.approval_required else CaseStatus.AWAITING_APPROVAL
 
     db.commit()
     db.refresh(case)

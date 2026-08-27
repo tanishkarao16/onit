@@ -67,7 +67,8 @@ def test_plan_case_persists_plan_and_activity():
 
         assert plan.approval_required is True
 
-        assert case.status == CaseStatus.ACTION_READY
+        # Since the plan requires approval, case should be AWAITING_APPROVAL
+        assert case.status == CaseStatus.AWAITING_APPROVAL
 
         assert case.plan_summary == (
             "Prepare and submit a full refund request to the airline."

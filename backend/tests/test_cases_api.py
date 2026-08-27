@@ -226,3 +226,212 @@ def test_case_activity_endpoint():
 
     finally:
         db.close()
+
+
+def test_synthesize_endpoint_success_and_variants():
+    from app.db.database import SessionLocal
+    from app.models.case import Case as CaseModel, CaseResearch, CaseStatus
+
+    db = SessionLocal()
+
+    try:
+        # create a case
+        create_response = client.post(
+            "/cases",
+            json={
+                "title": "Synthesis test",
+                "description": "Test synthesis",
+            },
+        )
+        assert create_response.status_code == 200
+        case_id = create_response.json()["case"]["id"]
+
+        # add authoritative research
+        db_case = db.get(CaseModel, case_id)
+        db_case.status = CaseStatus.EVIDENCE_READY
+        db.commit()
+
+        db.add(
+            CaseResearch(
+                case_id=case_id,
+                source="gov.example",
+                title="Official policy",
+                summary="Official guidance",
+                relevance="high",
+                url="https://gov.example/policy",
+            )
+        )
+        db.commit()
+
+        # synthesize
+        resp = client.post(f"/cases/{case_id}/synthesize")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["case"]["status"] == "ACTION_READY"
+        assert data["case"]["approval_required"] is False
+
+        # missing case
+        resp2 = client.post("/cases/99999/synthesize")
+        assert resp2.status_code == 404
+
+        # insufficient evidence
+        create_response2 = client.post(
+            "/cases",
+            json={
+                "title": "Empty evidence",
+                "description": "No research",
+            },
+        )
+        cid2 = create_response2.json()["case"]["id"]
+
+        db_case2 = db.get(CaseModel, cid2)
+        db_case2.status = CaseStatus.EVIDENCE_READY
+        db.commit()
+
+        resp3 = client.post(f"/cases/{cid2}/synthesize")
+        assert resp3.status_code == 400
+
+        # non-authoritative evidence leads to awaiting approval
+        create_response3 = client.post(
+            "/cases",
+            json={
+                "title": "Generic evidence",
+                "description": "Generic source",
+            },
+        )
+        cid3 = create_response3.json()["case"]["id"]
+        db_case3 = db.get(CaseModel, cid3)
+        db_case3.status = CaseStatus.EVIDENCE_READY
+        db.commit()
+
+        db.add(
+            CaseResearch(
+                case_id=cid3,
+                source="example.com",
+                title="Blog post",
+                summary="Some opinion",
+                relevance="low",
+                url="https://example.com/article",
+            )
+        )
+        db.commit()
+
+        resp4 = client.post(f"/cases/{cid3}/synthesize")
+        assert resp4.status_code == 200
+        assert resp4.json()["case"]["status"] == "AWAITING_APPROVAL"
+
+    finally:
+        db.close()
+
+
+def test_synthesize_run_research_triggers_when_missing(monkeypatch):
+    from app.db.database import SessionLocal
+    from app.models.case import Case as CaseModel, CaseResearch, CaseStatus
+
+    db = SessionLocal()
+
+    try:
+        create_response = client.post(
+            "/cases",
+            json={"title": "Run research", "description": "run research"},
+        )
+        cid = create_response.json()["case"]["id"]
+
+        # ensure no research exists
+        assert db.query(CaseResearch).filter(CaseResearch.case_id == cid).count() == 0
+
+        # monkeypatch the real research_case to add a persisted research row
+        def fake_research(*args, **kwargs):
+            db_arg = kwargs.get("db") if "db" in kwargs else (args[0] if len(args) > 0 else None)
+            case_arg = kwargs.get("case") if "case" in kwargs else (args[1] if len(args) > 1 else None)
+            db_arg.add(
+                CaseResearch(
+                    case_id=case_arg.id,
+                    source="gov.example",
+                    title="Official policy",
+                    summary="Official guidance",
+                    relevance="high",
+                    url="https://gov.example/policy",
+                )
+            )
+            db_arg.commit()
+            return []
+
+        monkeypatch.setattr("app.api.cases.research_case", fake_research)
+
+        resp = client.post(f"/cases/{cid}/synthesize?run_research=true")
+        assert resp.status_code == 200
+        j = resp.json()
+        assert j["case"]["status"] == "ACTION_READY"
+        assert j["case"]["approval_required"] is False
+
+    finally:
+        db.close()
+
+
+def test_synthesize_run_research_skips_when_exists(monkeypatch):
+    from app.db.database import SessionLocal
+    from app.models.case import Case as CaseModel, CaseResearch, CaseStatus
+
+    db = SessionLocal()
+
+    try:
+        create_response = client.post(
+            "/cases",
+            json={"title": "Skip research", "description": "has evidence"},
+        )
+        cid = create_response.json()["case"]["id"]
+
+        # add existing low-quality research
+        db.add(
+            CaseResearch(
+                case_id=cid,
+                source="example.com",
+                title="Blog",
+                summary="opinion",
+                relevance="low",
+                url="https://example.com/article",
+            )
+        )
+        db.commit()
+
+        # If research_case is called it will raise — ensure it's not called
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("research_case should not have been called")
+
+        monkeypatch.setattr("app.api.cases.research_case", fail_if_called)
+
+        resp = client.post(f"/cases/{cid}/synthesize?run_research=true")
+        assert resp.status_code == 200
+        assert resp.json()["case"]["status"] == "AWAITING_APPROVAL"
+
+    finally:
+        db.close()
+
+
+def test_synthesize_run_research_handles_research_failure(monkeypatch):
+    from app.db.database import SessionLocal
+    from app.models.case import Case as CaseModel, CaseResearch, CaseStatus
+
+    db = SessionLocal()
+
+    try:
+        create_response = client.post(
+            "/cases",
+            json={"title": "Research fails", "description": "fail"},
+        )
+        cid = create_response.json()["case"]["id"]
+
+        # monkeypatch research_case to raise
+        def bad_research(*args, **kwargs):
+            raise ValueError("serpapi failure")
+
+        monkeypatch.setattr("app.api.cases.research_case", bad_research)
+
+        resp = client.post(f"/cases/{cid}/synthesize?run_research=true")
+        assert resp.status_code == 400
+        assert "serpapi failure" in resp.json()["detail"]
+
+    finally:
+        db.close()

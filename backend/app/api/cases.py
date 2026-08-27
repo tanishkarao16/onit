@@ -15,6 +15,10 @@ from app.services.case_parser import parse_case
 from app.services.case_persistence import persist_parsed_case
 from app.services.case_planning import plan_case
 from app.services.case_research import research_case
+from app.services.evidence_to_decision import synthesize_evidence_and_plan
+from app.services.case_research import research_case
+from app.models.case import CaseResearch
+from app.services.case_activity import record_activity
 
 
 Base.metadata.create_all(bind=engine)
@@ -313,6 +317,80 @@ def plan_case_endpoint(
             "steps": plan.steps,
             "approval_required": plan.approval_required,
         },
+    }
+
+
+
+@router.post("/{case_id}/synthesize")
+def synthesize_case_endpoint(
+    case_id: int,
+    run_research: bool = False,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    # Optionally run research first when requested and no persisted evidence exists
+    if run_research:
+        # check for existing persisted research
+        existing = (
+            db.query(CaseResearch)
+            .filter(CaseResearch.case_id == case.id)
+            .count()
+        )
+        if existing == 0:
+            # record orchestration activity
+            record_activity(
+                db=db,
+                case_id=case.id,
+                event_type="SYNTHESIS_ORCHESTRATION",
+                message="Synthesis requested with research; invoking research.",
+            )
+
+            try:
+                research_case(db=db, case=case)
+            except ValueError as exc:
+                # propagate as HTTP 400 with the research error message
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        result = synthesize_evidence_and_plan(db=db, case=case)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "status": case.status,
+            "issue": case.issue,
+            "recommended_action": case.recommended_action,
+            "priority": case.priority,
+            "decision_reason": case.decision_reason,
+            "plan_summary": case.plan_summary,
+            "plan_steps": case.plan_steps,
+            "approval_required": case.approval_required,
+        },
+        "decision": {
+            "issue": result.get("issue"),
+            "recommended_action": result.get("recommended_action"),
+            "priority": result.get("priority"),
+            "reason": result.get("decision_reason"),
+        },
+        "plan": {
+            "summary": result.get("plan_summary"),
+            "steps": result.get("plan_steps"),
+            "approval_required": result.get("approval_required"),
+        },
+        "evidence": result.get("evidence"),
     }
 
 
