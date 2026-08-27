@@ -1,7 +1,7 @@
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,8 @@ from app.services.evidence_to_decision import synthesize_evidence_and_plan
 from app.services.case_research import research_case
 from app.models.case import CaseResearch
 from app.services.case_activity import record_activity
+from app.models.case import CaseEvidence
+import json
 
 
 Base.metadata.create_all(bind=engine)
@@ -178,6 +180,179 @@ def get_case_research(
                 "created_at": item.created_at,
             }
             for item in research
+        ],
+    }
+
+
+
+
+@router.post("/{case_id}/evidence")
+async def add_case_evidence(
+    case_id: int,
+    request: Request,
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    # Accept either file upload (PDF/image) or JSON/text body
+    text_input = None
+    filename = None
+    mimetype = None
+    evidence_type = "text"
+
+    if file is not None:
+        filename = file.filename
+        mimetype = file.content_type
+        # save uploaded file to temp file
+        tmp = NamedTemporaryFile(delete=False)
+        contents = await file.read()
+        tmp.write(contents)
+        tmp.flush()
+        tmp.close()
+        # use nutrient to extract text
+        record_activity(db=db, case_id=case.id, event_type="EVIDENCE_EXTRACTION_STARTED", message=f"ONIT started extracting {filename}.")
+        try:
+            parsed = await parse_document(tmp.name)
+        except NutrientError as exc:
+            record_activity(db=db, case_id=case.id, event_type="EVIDENCE_EXTRACTION_FAILED", message=f"Extraction failed for {filename}: {str(exc)}")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        extracted_text = "\n".join(e.get("text", "") for e in parsed.get("output", {}).get("elements", []))
+        original_text = extracted_text
+        evidence_type = "pdf" if (mimetype and "pdf" in mimetype) else ("image" if (mimetype and mimetype.startswith("image/")) else "file")
+
+    else:
+        # try JSON body
+        try:
+            body = await request.json()
+            text_input = body.get("text")
+        except Exception:
+            # maybe form field
+            form = await request.form()
+            text_input = form.get("text")
+
+        if not text_input:
+            raise HTTPException(status_code=400, detail="No file or text provided.")
+
+        extracted_text = text_input
+        original_text = text_input
+        filename = None
+        mimetype = "text/plain"
+        evidence_type = "text"
+
+    # parse extracted_text using existing parser format
+    # map into nutrient-like response for parse_case
+    response = {"output": {"elements": [{"role": "Text", "text": extracted_text}]}}
+
+    from app.services.case_parser import parse_case
+
+    parsed_case = parse_case(response)
+
+    # build extracted facts dict
+    facts = {
+        "passenger": parsed_case.passenger,
+        "airline": parsed_case.airline,
+        "booking_reference": parsed_case.booking_reference,
+        "flight_number": getattr(parsed_case, "flight_number", None),
+        "cancellation_date": parsed_case.cancellation_date,
+        "amount": parsed_case.amount,
+        "requested_resolution": parsed_case.requested_resolution,
+        "supporting_facts": parsed_case.supporting_facts,
+    }
+
+    # persist evidence
+    ev = CaseEvidence(
+        case_id=case.id,
+        filename=filename,
+        evidence_type=evidence_type,
+        mimetype=mimetype,
+        original_text=original_text,
+        extracted_text=extracted_text,
+        extraction_status="COMPLETED",
+        extracted_facts=json.dumps(facts),
+    )
+
+    db.add(ev)
+
+    # update case fields if empty and extracted facts present
+    conflicts = {}
+    def try_set(field_name, value):
+        nonlocal conflicts
+        if not value:
+            return
+        existing = getattr(case, field_name, None)
+        if existing in (None, "", []):
+            setattr(case, field_name, value)
+        else:
+            if str(existing) != str(value):
+                conflicts[field_name] = {"existing": existing, "extracted": value}
+
+    try_set("passenger", parsed_case.passenger)
+    try_set("airline", parsed_case.airline)
+    try_set("booking_reference", parsed_case.booking_reference)
+    try_set("cancellation_date", parsed_case.cancellation_date)
+    # amount normalization: parsed_case.amount may contain normalized annotation
+    try_set("amount", parsed_case.amount)
+
+    db.commit()
+    db.refresh(ev)
+    db.refresh(case)
+
+    record_activity(db=db, case_id=case.id, event_type="EVIDENCE_ADDED", message=f"ONIT added evidence {filename or 'text input' }.")
+    record_activity(db=db, case_id=case.id, event_type="EVIDENCE_EXTRACTION_COMPLETED", message=f"ONIT extracted facts from {filename or 'text input' }.")
+
+    result = {
+        "id": ev.id,
+        "case_id": ev.case_id,
+        "filename": ev.filename,
+        "evidence_type": ev.evidence_type,
+        "mimetype": ev.mimetype,
+        "extraction_status": ev.extraction_status,
+        "extracted_facts": json.loads(ev.extracted_facts or "{}"),
+        "created_at": ev.created_at,
+    }
+
+    if conflicts:
+        result["conflicts"] = conflicts
+
+    return {"status": "ok", "evidence": result}
+
+
+
+@router.get("/{case_id}/evidence")
+def get_case_evidence(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    items = (
+        db.query(CaseEvidence)
+        .filter(CaseEvidence.case_id == case_id)
+        .order_by(CaseEvidence.created_at.asc(), CaseEvidence.id.asc())
+        .all()
+    )
+
+    return {
+        "status": "ok",
+        "evidence": [
+            {
+                "id": it.id,
+                "filename": it.filename,
+                "evidence_type": it.evidence_type,
+                "mimetype": it.mimetype,
+                "extraction_status": it.extraction_status,
+                "extracted_facts": json.loads(it.extracted_facts or "{}"),
+                "created_at": it.created_at,
+            }
+            for it in items
         ],
     }
 

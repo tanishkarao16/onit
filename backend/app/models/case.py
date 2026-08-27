@@ -223,3 +223,61 @@ class CaseResearch(Base):
         default=datetime.utcnow,
         nullable=False,
     )
+
+
+class CaseEvidence(Base):
+    __tablename__ = "case_evidence"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    case_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    filename: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    evidence_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    mimetype: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    original_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    extracted_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    extraction_status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="PENDING",
+    )
+
+    extracted_facts: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
