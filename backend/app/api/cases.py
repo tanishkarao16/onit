@@ -10,6 +10,7 @@ from app.integrations.nutrient import NutrientError, parse_document
 from app.models.case import Case, CaseActivity, CaseResearch, CaseStatus
 from app.services.case_analysis import analyze_case
 from app.services.case_approval import request_case_approval
+from app.services.case_approval import approve_case
 from app.services.case_decision import CaseDecision
 from app.services.case_parser import parse_case
 from app.services.case_persistence import persist_parsed_case
@@ -592,6 +593,35 @@ def request_case_approval_endpoint(
             status_code=400,
             detail=str(exc),
         ) from exc
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "status": case.status,
+            "recommended_action": case.recommended_action,
+            "approval_required": case.approval_required,
+        },
+    }
+
+
+@router.post("/{case_id}/approve")
+def approve_case_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    try:
+        case = approve_case(db=db, case=case)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {
         "status": "ok",

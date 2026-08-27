@@ -133,6 +133,8 @@ export default function CasePage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState("");
   const [uploadLoading, setUploadLoading] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,6 +270,33 @@ export default function CasePage() {
       );
     } finally {
       setActionLoading(false);
+    }
+  }
+
+  async function approveAction() {
+    if (!caseItem) return;
+
+    try {
+      setApproving(true);
+      setError("");
+
+      const resp = await fetch(`${API_URL}/cases/${caseItem.id}/approve`, {
+        method: "POST",
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        throw new Error(data.detail ?? "Unable to approve action.");
+      }
+
+      // refresh case and related lists
+      await refreshCase();
+      setShowReview(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to approve action.");
+    } finally {
+      setApproving(false);
     }
   }
 
@@ -990,38 +1019,99 @@ export default function CasePage() {
           </div>
         </section>
 
-        {/* Approval notice */}
-        {caseItem.status === "AWAITING_APPROVAL" && (
+        {/* Human review / approval */}
+        {caseItem.status === "AWAITING_APPROVAL" && caseItem.approval_required && (
           <section className="mt-12">
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
               <p className="text-xs font-semibold tracking-[0.14em] text-amber-700">
-                YOUR DECISION
+                HUMAN REVIEW REQUIRED
               </p>
 
               <h2 className="mt-2 text-xl font-semibold text-amber-950">
-                ONIT is waiting for your approval.
+                ONIT has completed its analysis and prepared an execution plan.
               </h2>
 
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-amber-900/70">
-                No external action will be taken until you explicitly
-                approve the prepared action.
+              <p className="mt-4 max-w-2xl text-sm leading-6 text-amber-900/70">
+                <strong>Decision</strong>
+                <br />
+                {caseItem.recommended_action ?? "(No decision)"}
               </p>
 
-              <div className="mt-5 flex flex-wrap gap-3">
-                <button
-                  disabled
-                  className="rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white opacity-50"
-                >
-                  Approve action
-                </button>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-amber-900/70">
+                <strong>Why</strong>
+                <br />
+                {caseItem.decision_reason ?? "No reason provided."}
+              </p>
 
-                <button
-                  disabled
-                  className="rounded-full border border-amber-900/10 bg-white px-5 py-3 text-sm font-medium text-amber-900 opacity-50"
-                >
-                  Reject
-                </button>
+              <div className="mt-4 max-w-2xl">
+                <p className="text-sm font-semibold">Execution plan</p>
+                <div className="mt-2 whitespace-pre-line text-sm text-[#171717]">{caseItem.plan_steps ?? caseItem.plan_summary ?? "No plan provided."}</div>
               </div>
+
+              <div className="mt-5 flex flex-wrap gap-3">
+                {!showReview ? (
+                  <button
+                    onClick={() => setShowReview(true)}
+                    disabled={actionLoading}
+                    className="rounded-full bg-white px-5 py-3 text-sm font-medium text-[#171717]"
+                  >
+                    Review &amp; Approve
+                  </button>
+                ) : (
+                  <div className="w-full rounded-2xl border border-black/8 bg-white p-4">
+                    <p className="text-sm font-medium">Review this action before approving.</p>
+
+                    <div className="mt-3 space-y-2 text-sm text-[#454542]">
+                      <p><strong>Decision:</strong> {caseItem.recommended_action ?? '—'}</p>
+                      <p><strong>Why:</strong> {caseItem.decision_reason ?? '—'}</p>
+                      <p><strong>Evidence strength:</strong> {evidence.length > 0 && research.length > 0 ? 'Strong' : (evidence.length > 0 || research.length > 0 ? 'Moderate' : 'Insufficient')}</p>
+                      <p><strong>Supporting evidence:</strong> {evidence.length > 0 ? `${evidence.length} items` : 'None'}</p>
+                      <p><strong>Research sources:</strong> {research.length > 0 ? `${research.length} sources` : 'None'}</p>
+                    </div>
+
+                    <div className="mt-4 flex gap-3">
+                      <button
+                        onClick={approveAction}
+                        disabled={approving}
+                        className="rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {approving ? 'Approving...' : 'Approve & Continue'}
+                      </button>
+
+                      <button
+                        onClick={() => setShowReview(false)}
+                        disabled={approving}
+                        className="rounded-full border border-amber-900/10 bg-white px-5 py-3 text-sm font-medium text-amber-900"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Show ACTION_READY after approval */}
+        {caseItem.status === "ACTION_READY" && (
+          <section className="mt-12">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
+              <p className="text-xs font-semibold tracking-[0.14em] text-emerald-700">ACTION READY</p>
+
+              <h2 className="mt-2 text-xl font-semibold text-emerald-950">Ready for execution</h2>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-900/70">
+                Human approval has been recorded. ONIT prepared the following action:
+              </p>
+
+              <div className="mt-4 max-w-2xl">
+                <p className="text-sm font-semibold">{caseItem.recommended_action ?? 'No action provided.'}</p>
+
+                <div className="mt-3 whitespace-pre-line text-sm text-[#171717]">{caseItem.plan_steps ?? caseItem.plan_summary ?? 'No plan provided.'}</div>
+              </div>
+
+              <p className="mt-4 text-sm text-emerald-900/80">Approved by human review.</p>
             </div>
           </section>
         )}
