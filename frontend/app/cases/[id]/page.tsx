@@ -782,6 +782,140 @@ export default function CasePage() {
           )}
         </section>
 
+        {/* Evidence Trail (provenance) */}
+        <section className="mt-12">
+          <SectionLabel>EVIDENCE TRAIL</SectionLabel>
+
+          <div className="mt-4 rounded-2xl border border-black/8 bg-white p-6">
+            <p className="text-sm text-[#595955]">Why ONIT reached this decision</p>
+
+            <div className="mt-4 grid gap-6 md:grid-cols-[1fr_320px]">
+              <div>
+                <h4 className="text-sm font-semibold">CASE FACTS</h4>
+                <ul className="mt-2 space-y-1 text-sm text-[#454542]">
+                  {caseItem.refund_received !== null && (
+                    <li>Refund received: {caseItem.refund_received ? "Yes" : "No"}</li>
+                  )}
+
+                  {caseItem.cancellation_date && (
+                    <li>Cancellation date: {caseItem.cancellation_date}</li>
+                  )}
+
+                  {caseItem.requested_resolution && (
+                    <li>Requested resolution: {caseItem.requested_resolution}</li>
+                  )}
+                </ul>
+
+                <div className="my-4 flex items-center justify-center text-sm text-[#8a8a86]">↓</div>
+
+                <h4 className="text-sm font-semibold">UPLOADED EVIDENCE</h4>
+
+                {evidence.length === 0 ? (
+                  <p className="mt-2 text-sm text-[#8a8a86]">No uploaded evidence yet.</p>
+                ) : (
+                  <div className="mt-2 space-y-3">
+                    {evidence.map((ev) => (
+                      <div key={ev.id} className="rounded-md border border-black/6 p-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium">{ev.filename ?? (ev.evidence_type ?? 'Text input')}</p>
+                          <span className="text-xs text-[#8a8a86]">{formatDate(ev.created_at)}</span>
+                        </div>
+
+                        <div className="mt-2 text-sm text-[#595955]">
+                          {ev.extracted_facts ? (
+                            <ul className="space-y-1">
+                              {Object.entries(ev.extracted_facts as Record<string, unknown>).map(([k, v]) => (
+                                <li key={k}>
+                                  <span className="font-medium">{k.replaceAll("_", " ")}: </span>
+                                  <span>{Array.isArray(v) ? (v as string[]).join('; ') : String(v ?? '—')}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-sm text-[#8a8a86]">No extracted facts.</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="my-4 flex items-center justify-center text-sm text-[#8a8a86]">↓</div>
+
+                <h4 className="text-sm font-semibold">EXTERNAL RESEARCH</h4>
+
+                {research.length === 0 ? (
+                  <p className="mt-2 text-sm text-[#8a8a86]">No external research recorded yet.</p>
+                ) : (
+                  <div className="mt-2 space-y-3">
+                    {research.map((r) => {
+                      const url = r.url ?? '';
+                      const domain = (url.split('/')[2] || r.source || '').toLowerCase();
+                      const isGov = domain.includes('.gov') || (r.source || '').toLowerCase().includes('gov');
+                      const isAirline = caseItem.airline ? domain.includes((caseItem.airline || '').toLowerCase()) || (r.source || '').toLowerCase().includes((caseItem.airline || '').toLowerCase()) : false;
+                      const classification = isGov ? 'OFFICIAL' : isAirline ? 'AIRLINE' : 'OTHER';
+
+                      return (
+                        <div key={r.id} className="rounded-md border border-black/6 p-3">
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <p className="text-sm font-medium">{r.title}</p>
+                              <p className="mt-1 text-xs text-[#8a8a86]">{classification} · {r.relevance}</p>
+                            </div>
+
+                            <div className="text-right">
+                              {r.url ? (
+                                <a href={r.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-[#171717]">Open</a>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <p className="mt-2 text-sm text-[#595955]">{r.summary}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <aside>
+                <div className="rounded-md bg-[#f7f7f5] p-4">
+                  <h5 className="text-sm font-semibold">ONIT DECISION</h5>
+                  <p className="mt-2 text-sm text-[#454542]">{caseItem.recommended_action ?? 'No recommendation yet.'}</p>
+
+                  <div className="mt-4">
+                    <p className="text-xs text-[#8a8a86]">Evidence strength</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {evidence.length > 0 && research.length > 0 ? 'Strong' : (evidence.length > 0 || research.length > 0 ? 'Moderate' : 'Insufficient')}
+                    </p>
+                  </div>
+
+                  <div className="mt-4">
+                    <p className="text-xs text-[#8a8a86]">Decision supported by</p>
+                    <ul className="mt-2 space-y-2 text-sm text-[#454542]">
+                      {caseItem.refund_received !== null && (
+                        <li>✓ Refund received: {caseItem.refund_received ? 'Yes' : 'No'}{evidence.some(ev => (ev.extracted_facts && ((ev.extracted_facts as Record<string, unknown>)['refund_received'] !== undefined))) ? ' — uploaded evidence' : ''}</li>
+                      )}
+
+                      {caseItem.cancellation_date && (
+                        <li>✓ Cancellation date: {caseItem.cancellation_date}{evidence.some(ev => ev.extracted_facts && (ev.extracted_facts as Record<string, unknown>)['cancellation_date']) ? ' — uploaded evidence' : ''}</li>
+                      )}
+
+                      {caseItem.requested_resolution && (
+                        <li>✓ Requested resolution: {caseItem.requested_resolution}{evidence.some(ev => ev.extracted_facts && (ev.extracted_facts as Record<string, unknown>)['requested_resolution']) ? ' — uploaded evidence' : ''}</li>
+                      )}
+
+                      {research.slice(0, 3).map(r => (
+                        <li key={`sup-${r.id}`}>✓ {r.title} — {((r.url && r.url.includes('.gov')) ? 'Official source' : 'External source')}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </section>
+
         {/* Plan */}
         {(caseItem.plan_summary ||
           caseItem.plan_steps) && (
