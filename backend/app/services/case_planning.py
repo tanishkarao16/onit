@@ -19,26 +19,139 @@ def build_case_plan(decision: CaseDecision) -> CasePlan:
     """
     Convert ONIT's case decision into a concrete execution plan.
 
-    This first version is deterministic so it is cheap, testable,
-    and predictable.
+    Planning is based on the meaning of the decision rather than
+    requiring one exact recommended-action sentence.
     """
 
-    if decision.recommended_action == "Request the full refund from the airline":
+    issue = (decision.issue or "").lower()
+    action = (decision.recommended_action or "").lower()
+
+    # ========================================================
+    # CANCELLED FLIGHT + REFUND NOT RECEIVED
+    # ========================================================
+
+    if (
+        "cancelled flight" in issue
+        and "refund not received" in issue
+    ):
         return CasePlan(
-            summary="Prepare and submit a full refund request to the airline.",
+            summary=(
+                "Prepare and pursue the passenger's applicable "
+                "refund request with the airline."
+            ),
             steps=[
-                "Verify the cancellation and refund evidence.",
+                "Verify the flight cancellation and supporting evidence.",
+                "Verify the passenger's refund eligibility.",
                 "Prepare a refund request using the case details.",
                 "Attach the supporting evidence.",
-                "Submit the refund request to the airline.",
+                "Contact the airline and submit the applicable refund request.",
                 "Track the airline's response.",
-                "Follow up if the refund is not received within the expected timeframe.",
+                "Follow up if the airline does not respond or the refund is not received.",
             ],
             approval_required=True,
         )
 
+    # ========================================================
+    # GENERIC REFUND
+    # ========================================================
+
+    if "refund" in issue or "refund" in action:
+        return CasePlan(
+            summary=(
+                "Verify refund eligibility and prepare the "
+                "appropriate refund action."
+            ),
+            steps=[
+                "Review the available refund evidence.",
+                "Verify the applicable refund eligibility and policy.",
+                "Prepare the appropriate refund request or next action.",
+                "Attach the supporting evidence.",
+                "Submit the action to the relevant organization.",
+                "Track the response.",
+                "Follow up if required.",
+            ],
+            approval_required=True,
+        )
+
+    # ========================================================
+    # CANCELLATION
+    # ========================================================
+
+    if "cancellation" in issue or "cancelled" in issue:
+        return CasePlan(
+            summary=(
+                "Review the cancellation circumstances and "
+                "prepare the appropriate remedy."
+            ),
+            steps=[
+                "Review the cancellation evidence.",
+                "Verify the applicable policy or passenger rights.",
+                "Determine the appropriate remedy.",
+                "Prepare the required action.",
+                "Submit the action to the relevant organization.",
+                "Track the response.",
+            ],
+            approval_required=True,
+        )
+
+    # ========================================================
+    # PAYMENT / BILLING
+    # ========================================================
+
+    if (
+        "payment" in issue
+        or "billing" in issue
+        or "charge" in issue
+    ):
+        return CasePlan(
+            summary=(
+                "Review the payment issue and prepare the "
+                "appropriate resolution."
+            ),
+            steps=[
+                "Review the transaction evidence.",
+                "Verify the charge and payment details.",
+                "Determine the appropriate resolution.",
+                "Prepare the required action.",
+                "Submit the action to the relevant organization.",
+                "Track the response.",
+            ],
+            approval_required=True,
+        )
+
+    # ========================================================
+    # DELIVERY / ORDER
+    # ========================================================
+
+    if (
+        "delivery" in issue
+        or "order" in issue
+    ):
+        return CasePlan(
+            summary=(
+                "Review the delivery or order issue and "
+                "prepare the appropriate resolution."
+            ),
+            steps=[
+                "Review the order and delivery evidence.",
+                "Verify the delivery status.",
+                "Determine the appropriate resolution.",
+                "Prepare the required action.",
+                "Contact the relevant organization.",
+                "Track the response.",
+            ],
+            approval_required=True,
+        )
+
+    # ========================================================
+    # GENERIC HUMAN REVIEW
+    # ========================================================
+
     return CasePlan(
-        summary="Review the case and determine the appropriate next action.",
+        summary=(
+            "Review the case and determine the appropriate "
+            "next action."
+        ),
         steps=[
             "Review the available case evidence.",
             "Determine the appropriate resolution.",
@@ -72,8 +185,12 @@ def plan_case(
     case.plan_summary = plan.summary
     case.plan_steps = json.dumps(plan.steps)
     case.approval_required = plan.approval_required
-    # Transition depending on whether approval is required
-    case.status = CaseStatus.ACTION_READY if not plan.approval_required else CaseStatus.AWAITING_APPROVAL
+
+    case.status = (
+        CaseStatus.ACTION_READY
+        if not plan.approval_required
+        else CaseStatus.AWAITING_APPROVAL
+    )
 
     db.commit()
     db.refresh(case)
