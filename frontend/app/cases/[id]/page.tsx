@@ -2,29 +2,44 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 type CaseItem = {
   id: number;
   title: string;
   description: string;
-  passenger: string | null;
-  booking_reference: string | null;
-  organization: string | null;
-  airline: string | null;
-  cancellation_date: string | null;
-  amount: string | null;
-  currency: string | null;
-  refund_received: boolean | null;
-  requested_resolution: string | null;
-  supporting_facts: string | null;
-  issue: string | null;
-  recommended_action: string | null;
-  priority: string | null;
-  decision_reason: string | null;
-  plan_summary: string | null;
-  plan_steps: string | null;
-  approval_required: boolean;
+
+  passenger?: string | null;
+  booking_reference?: string | null;
+
+  organization?: string | null;
+  airline?: string | null;
+
+  cancellation_date?: string | null;
+
+  amount?: string | number | null;
+  currency?: string | null;
+
+  refund_received?: boolean | string | null;
+
+  requested_resolution?: string | null;
+  supporting_facts?: string | null;
+
+  issue?: string | null;
+  recommended_action?: string | null;
+  priority?: string | null;
+  decision_reason?: string | null;
+
+  plan_summary?: string | null;
+  plan_steps?: string | null;
+
+  approval_required?: boolean | null;
+
   status: string;
   created_at: string;
   updated_at: string;
@@ -39,69 +54,286 @@ type ActivityItem = {
 
 type ResearchItem = {
   id: number;
-  source: string;
-  title: string;
-  summary: string;
-  relevance: string;
+  source?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  relevance?: string | null;
   url?: string | null;
   created_at: string;
 };
 
 type EvidenceItem = {
   id: number;
-  filename: string | null;
-  evidence_type: string | null;
-  mimetype: string | null;
-  extraction_status: string | null;
-  extracted_facts: Record<string, unknown> | null;
+  filename?: string | null;
+  evidence_type?: string | null;
+  mimetype?: string | null;
+  extraction_status?: string | null;
+  extracted_facts?: Record<string, unknown> | null;
   created_at: string;
 };
 
-const API_URL = "http://127.0.0.1:8000";
+type WorkflowStatus =
+  | "CREATED"
+  | "EVIDENCE_READY"
+  | "RESEARCHING"
+  | "RESEARCHED"
+  | "ACTION_READY"
+  | "AWAITING_APPROVAL"
+  | "RESOLVED"
+  | "CLOSED";
 
-function formatStatus(status: string) {
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://127.0.0.1:8000";
+
+const WORKFLOW_STATUSES: WorkflowStatus[] = [
+  "CREATED",
+  "EVIDENCE_READY",
+  "RESEARCHING",
+  "RESEARCHED",
+  "ACTION_READY",
+  "AWAITING_APPROVAL",
+  "RESOLVED",
+];
+
+const WORKFLOW_LABELS: Record<string, string> = {
+  CREATED: "Case",
+  EVIDENCE_READY: "Evidence",
+  RESEARCHING: "Research",
+  RESEARCHED: "Research",
+  ACTION_READY: "Decision",
+  AWAITING_APPROVAL: "Approval",
+  RESOLVED: "Resolution",
+  CLOSED: "Resolution",
+};
+
+function normalizeStatus(
+  status?: string | null,
+): string {
+  return String(status ?? "")
+    .trim()
+    .toUpperCase();
+}
+
+function formatStatus(
+  status?: string | null,
+): string {
+  if (!status) {
+    return "Unknown";
+  }
+
   return status
     .toLowerCase()
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleString("en-US", {
+function formatDate(
+  value?: string | null,
+): string {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
 }
 
-function StatusPill({ status }: { status: string }) {
-  const isReady =
-    status === "ACTION_READY" ||
-    status === "AWAITING_APPROVAL";
+function formatLabel(
+  value: string,
+): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
-  const isResolved =
-    status === "RESOLVED" ||
-    status === "CLOSED";
+function formatAmount(
+  amount?: string | number | null,
+  currency?: string | null,
+): string | null {
+  if (
+    amount === null ||
+    amount === undefined ||
+    amount === ""
+  ) {
+    return null;
+  }
+
+  const rawAmount = String(amount).trim();
+
+  if (!rawAmount) {
+    return null;
+  }
+
+  const rawCurrency = String(currency ?? "").trim();
+
+  if (!rawCurrency) {
+    return rawAmount;
+  }
+
+  const alreadyContainsCurrency =
+    rawAmount
+      .toLowerCase()
+      .startsWith(rawCurrency.toLowerCase());
+
+  if (alreadyContainsCurrency) {
+    return rawAmount;
+  }
+
+  const currencyAtEnd =
+    rawAmount
+      .toLowerCase()
+      .endsWith(rawCurrency.toLowerCase());
+
+  if (currencyAtEnd) {
+    return rawAmount;
+  }
+
+  return `${rawCurrency}${rawAmount}`;
+}
+
+function formatUnknownValue(
+  value: unknown,
+): string {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "—";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return "—";
+    }
+
+    return value
+      .map((item) => formatUnknownValue(item))
+      .join("; ");
+  }
+
+  if (
+    typeof value === "object"
+  ) {
+    const entries = Object.entries(
+      value as Record<string, unknown>,
+    );
+
+    if (entries.length === 0) {
+      return "—";
+    }
+
+    return entries
+      .map(
+        ([key, nestedValue]) =>
+          `${formatLabel(key)}: ${formatUnknownValue(
+            nestedValue,
+          )}`,
+      )
+      .join(" · ");
+  }
+
+  return String(value);
+}
+
+function getDomain(
+  url?: string | null,
+  fallback?: string | null,
+): string {
+  if (!url) {
+    return fallback || "Source";
+  }
+
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return fallback || "Source";
+  }
+}
+
+function getRelevanceLabel(
+  relevance?: string | null,
+): string {
+  if (!relevance) {
+    return "Not specified";
+  }
+
+  return formatStatus(relevance);
+}
+
+function StatusPill({
+  status,
+}: {
+  status: string;
+}) {
+  const normalized = normalizeStatus(status);
+
+  const ready =
+    normalized === "ACTION_READY" ||
+    normalized === "AWAITING_APPROVAL";
+
+  const resolved =
+    normalized === "RESOLVED" ||
+    normalized === "CLOSED";
+
+  const research =
+    normalized === "RESEARCHING" ||
+    normalized === "RESEARCHED";
+
+  const evidence =
+    normalized === "EVIDENCE_READY";
 
   return (
     <span
-      className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
-        isReady
+      className={[
+        "inline-flex items-center gap-2 rounded-full px-3 py-1.5",
+        "text-xs font-medium",
+        ready
           ? "bg-amber-50 text-amber-700"
-          : isResolved
+          : resolved
             ? "bg-emerald-50 text-emerald-700"
-            : "bg-zinc-100 text-zinc-600"
-      }`}
+            : research
+              ? "bg-blue-50 text-blue-700"
+              : evidence
+                ? "bg-violet-50 text-violet-700"
+                : "bg-zinc-100 text-zinc-600",
+      ].join(" ")}
     >
       <span
-        className={`h-1.5 w-1.5 rounded-full ${
-          isReady
+        className={[
+          "h-1.5 w-1.5 rounded-full",
+          ready
             ? "bg-amber-500"
-            : isResolved
+            : resolved
               ? "bg-emerald-500"
-              : "bg-zinc-400"
-        }`}
+              : research
+                ? "bg-blue-500"
+                : evidence
+                  ? "bg-violet-500"
+                  : "bg-zinc-400",
+        ].join(" ")}
       />
 
       {formatStatus(status)}
@@ -121,63 +353,349 @@ function SectionLabel({
   );
 }
 
+function InfoItem({
+  label,
+  value,
+}: {
+  label: string;
+  value?: string | null;
+}) {
+  return (
+    <div className="border-b border-black/[0.06] p-5 last:border-b-0">
+      <p className="text-xs text-[#8a8a86]">
+        {label}
+      </p>
+
+      <p className="mt-1 text-sm font-medium text-[#171717]">
+        {value || "Not available"}
+      </p>
+    </div>
+  );
+}
+
+function AssessmentRow({
+  label,
+  value,
+  last = false,
+}: {
+  label: string;
+  value: string;
+  last?: boolean;
+}) {
+  return (
+    <div
+      className={[
+        "grid gap-3 p-5 md:grid-cols-[180px_1fr]",
+        !last
+          ? "border-b border-black/[0.06]"
+          : "",
+      ].join(" ")}
+    >
+      <p className="text-xs font-medium uppercase tracking-[0.08em] text-[#8a8a86]">
+        {label}
+      </p>
+
+      <p className="whitespace-pre-line text-sm leading-7 text-[#454542]">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function EvidenceStrength({
+  evidenceCount,
+  researchCount,
+}: {
+  evidenceCount: number;
+  researchCount: number;
+}) {
+  if (
+    evidenceCount > 0 &&
+    researchCount > 0
+  ) {
+    return (
+      <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700">
+        Strong
+      </span>
+    );
+  }
+
+  if (
+    evidenceCount > 0 ||
+    researchCount > 0
+  ) {
+    return (
+      <span className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700">
+        Moderate
+      </span>
+    );
+  }
+
+  return (
+    <span className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-600">
+      Insufficient
+    </span>
+  );
+}
+
+function Step({
+  number,
+  title,
+  description,
+  state,
+}: {
+  number: string;
+  title: string;
+  description: string;
+  state:
+    | "complete"
+    | "current"
+    | "upcoming";
+}) {
+  return (
+    <div className="flex gap-3">
+      <div
+        className={[
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+          state === "complete"
+            ? "bg-[#171717] text-white"
+            : state === "current"
+              ? "border border-amber-300 bg-amber-50 text-amber-700"
+              : "border border-black/10 bg-white text-[#a0a09b]",
+        ].join(" ")}
+      >
+        {state === "complete"
+          ? "✓"
+          : number}
+      </div>
+
+      <div className="pt-0.5">
+        <p
+          className={[
+            "text-sm font-medium",
+            state === "upcoming"
+              ? "text-[#a0a09b]"
+              : "text-[#171717]",
+          ].join(" ")}
+        >
+          {title}
+        </p>
+
+        <p className="mt-1 text-xs leading-5 text-[#8a8a86]">
+          {description}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function WorkflowStep({
+  status,
+  index,
+  complete,
+  current,
+}: {
+  status: string;
+  index: number;
+  complete: boolean;
+  current: boolean;
+}) {
+  return (
+    <div className="flex flex-1 items-start">
+      <div className="flex flex-col items-center text-center">
+        <div
+          className={[
+            "flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold",
+            complete
+              ? "bg-[#171717] text-white"
+              : current
+                ? "border border-amber-300 bg-amber-50 text-amber-700"
+                : "border border-black/10 bg-[#fafaf8] text-[#a0a09b]",
+          ].join(" ")}
+        >
+          {complete
+            ? "✓"
+            : index + 1}
+        </div>
+
+        <p
+          className={[
+            "mt-2 whitespace-nowrap text-[11px] font-medium",
+            current
+              ? "text-[#171717]"
+              : "text-[#8a8a86]",
+          ].join(" ")}
+        >
+          {WORKFLOW_LABELS[status] ??
+            formatStatus(status)}
+        </p>
+      </div>
+
+      {index <
+        WORKFLOW_STATUSES.length - 1 && (
+        <div
+          className={[
+            "mt-4 h-px flex-1",
+            complete
+              ? "bg-[#171717]"
+              : "bg-black/10",
+          ].join(" ")}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function CasePage() {
   const params = useParams();
-  const caseId = params.id;
 
-  const [caseItem, setCaseItem] = useState<CaseItem | null>(null);
-  const [activities, setActivities] = useState<ActivityItem[]>([]);
-  const [research, setResearch] = useState<ResearchItem[]>([]);
-  const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [showReview, setShowReview] = useState(false);
-  const [approving, setApproving] = useState(false);
+  const caseId = Array.isArray(params.id)
+    ? params.id[0]
+    : params.id;
 
-  useEffect(() => {
-    let cancelled = false;
+  const [caseItem, setCaseItem] =
+    useState<CaseItem | null>(null);
 
-    async function fetchCase() {
+  const [activities, setActivities] =
+    useState<ActivityItem[]>([]);
+
+  const [research, setResearch] =
+    useState<ResearchItem[]>([]);
+
+  const [evidence, setEvidence] =
+    useState<EvidenceItem[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState("");
+
+  const [actionLoading, setActionLoading] =
+    useState(false);
+
+  const [uploadLoading, setUploadLoading] =
+    useState(false);
+
+  const [showReview, setShowReview] =
+    useState(false);
+
+  const [approving, setApproving] =
+    useState(false);
+
+  const loadCase = useCallback(
+    async (
+      signal?: AbortSignal,
+    ) => {
       if (!caseId) {
         return;
       }
 
       try {
+        setError("");
+
+        const responses =
+          await Promise.all([
+            fetch(
+              `${API_URL}/cases/${caseId}`,
+              {
+                cache: "no-store",
+                signal,
+              },
+            ),
+
+            fetch(
+              `${API_URL}/cases/${caseId}/activity`,
+              {
+                cache: "no-store",
+                signal,
+              },
+            ),
+
+            fetch(
+              `${API_URL}/cases/${caseId}/research`,
+              {
+                cache: "no-store",
+                signal,
+              },
+            ),
+
+            fetch(
+              `${API_URL}/cases/${caseId}/evidence`,
+              {
+                cache: "no-store",
+                signal,
+              },
+            ),
+          ]);
+
         const [
           caseResponse,
           activityResponse,
           researchResponse,
           evidenceResponse,
-        ] = await Promise.all([
-          fetch(`${API_URL}/cases/${caseId}`),
-          fetch(`${API_URL}/cases/${caseId}/activity`),
-          fetch(`${API_URL}/cases/${caseId}/research`),
-          fetch(`${API_URL}/cases/${caseId}/evidence`),
-        ]);
+        ] = responses;
 
         if (!caseResponse.ok) {
-          throw new Error("Case not found.");
+          throw new Error(
+            "Case not found.",
+          );
         }
 
-        const caseData = await caseResponse.json();
-        const activityData = await activityResponse.json();
-        const researchData = await researchResponse.json();
-        const evidenceData = await evidenceResponse.json();
+        const caseData =
+          await caseResponse.json();
 
-        if (cancelled) {
+        const activityData =
+          activityResponse.ok
+            ? await activityResponse.json()
+            : { activities: [] };
+
+        const researchData =
+          researchResponse.ok
+            ? await researchResponse.json()
+            : { research: [] };
+
+        const evidenceData =
+          evidenceResponse.ok
+            ? await evidenceResponse.json()
+            : { evidence: [] };
+
+        if (signal?.aborted) {
           return;
         }
 
-        setCaseItem(caseData.case);
-        setActivities(activityData.activities ?? []);
-        setResearch(researchData.research ?? []);
-        setEvidence(evidenceData.evidence ?? []);
-        setError("");
-        setLoading(false);
+        setCaseItem(
+          caseData?.case ?? null,
+        );
+
+        setActivities(
+          Array.isArray(
+            activityData?.activities,
+          )
+            ? activityData.activities
+            : [],
+        );
+
+        setResearch(
+          Array.isArray(
+            researchData?.research,
+          )
+            ? researchData.research
+            : [],
+        );
+
+        setEvidence(
+          Array.isArray(
+            evidenceData?.evidence,
+          )
+            ? evidenceData.evidence
+            : [],
+        );
       } catch (err) {
-        if (cancelled) {
+        if (
+          err instanceof DOMException &&
+          err.name === "AbortError"
+        ) {
           return;
         }
 
@@ -186,56 +704,33 @@ export default function CasePage() {
             ? err.message
             : "Unable to load this case.",
         );
+      }
+    },
+    [caseId],
+  );
+
+  useEffect(() => {
+    const controller =
+      new AbortController();
+
+    const load = async () => {
+      setLoading(true);
+
+      await loadCase(
+        controller.signal,
+      );
+
+      if (!controller.signal.aborted) {
         setLoading(false);
       }
-    }
+    };
 
-    fetchCase();
+    void load();
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [caseId]);
-
-  async function refreshCase() {
-    if (!caseId) {
-      return;
-    }
-
-    try {
-      const [
-        caseResponse,
-        activityResponse,
-        researchResponse,
-        evidenceResponse,
-      ] = await Promise.all([
-        fetch(`${API_URL}/cases/${caseId}`),
-        fetch(`${API_URL}/cases/${caseId}/activity`),
-        fetch(`${API_URL}/cases/${caseId}/research`),
-        fetch(`${API_URL}/cases/${caseId}/evidence`),
-      ]);
-
-      if (!caseResponse.ok) {
-        throw new Error("Case not found.");
-      }
-
-      const caseData = await caseResponse.json();
-      const activityData = await activityResponse.json();
-      const researchData = await researchResponse.json();
-      const evidenceData = await evidenceResponse.json();
-
-      setCaseItem(caseData.case);
-      setActivities(activityData.activities ?? []);
-      setResearch(researchData.research ?? []);
-      setEvidence(evidenceData.evidence ?? []);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to refresh this case.",
-      );
-    }
-  }
+  }, [loadCase]);
 
   async function requestApproval() {
     if (!caseItem) {
@@ -253,15 +748,19 @@ export default function CasePage() {
         },
       );
 
-      const data = await response.json();
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
 
       if (!response.ok) {
         throw new Error(
-          data.detail ?? "Unable to request approval.",
+          data?.detail ??
+            "Unable to request approval.",
         );
       }
 
-      await refreshCase();
+      await loadCase();
     } catch (err) {
       setError(
         err instanceof Error
@@ -274,27 +773,42 @@ export default function CasePage() {
   }
 
   async function approveAction() {
-    if (!caseItem) return;
+    if (!caseItem) {
+      return;
+    }
 
     try {
       setApproving(true);
       setError("");
 
-      const resp = await fetch(`${API_URL}/cases/${caseItem.id}/approve`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `${API_URL}/cases/${caseItem.id}/approve`,
+        {
+          method: "POST",
+        },
+      );
 
-      const data = await resp.json();
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
 
-      if (!resp.ok) {
-        throw new Error(data.detail ?? "Unable to approve action.");
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ??
+            "Unable to approve action.",
+        );
       }
 
-      // refresh case and related lists
-      await refreshCase();
+      await loadCase();
+
       setShowReview(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to approve action.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to approve action.",
+      );
     } finally {
       setApproving(false);
     }
@@ -316,15 +830,19 @@ export default function CasePage() {
         },
       );
 
-      const data = await response.json();
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
 
       if (!response.ok) {
         throw new Error(
-          data.detail ?? "Unable to research this case.",
+          data?.detail ??
+            "Unable to research this case.",
         );
       }
 
-      await refreshCase();
+      await loadCase();
     } catch (err) {
       setError(
         err instanceof Error
@@ -336,8 +854,13 @@ export default function CasePage() {
     }
   }
 
-  async function uploadEvidence(file: File | null, text?: string) {
-    if (!caseItem) return;
+  async function uploadEvidence(
+    file: File | null,
+    text?: string,
+  ) {
+    if (!caseItem) {
+      return;
+    }
 
     try {
       setUploadLoading(true);
@@ -346,34 +869,112 @@ export default function CasePage() {
       const form = new FormData();
 
       if (file) {
-        form.append("file", file, file.name);
-      } else if (text) {
-        form.append("text", text);
+        form.append(
+          "file",
+          file,
+          file.name,
+        );
+      } else if (text?.trim()) {
+        form.append(
+          "text",
+          text.trim(),
+        );
       } else {
-        throw new Error("No file or text provided");
+        throw new Error(
+          "No file or text provided.",
+        );
       }
 
-      const resp = await fetch(`${API_URL}/cases/${caseItem.id}/evidence`, {
-        method: "POST",
-        body: form,
-      });
+      const response = await fetch(
+        `${API_URL}/cases/${caseItem.id}/evidence`,
+        {
+          method: "POST",
+          body: form,
+        },
+      );
 
-      const data = await resp.json();
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
 
-      if (!resp.ok) {
-        throw new Error(data.detail || "Upload failed");
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ??
+            "Unable to upload evidence.",
+        );
       }
 
-      await refreshCase();
-      // fetch evidence list
-      const ev = await (await fetch(`${API_URL}/cases/${caseItem.id}/evidence`)).json();
-      setEvidence(ev.evidence ?? []);
+      await loadCase();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to upload evidence.",
+      );
     } finally {
       setUploadLoading(false);
     }
   }
+
+  const normalizedStatus =
+    normalizeStatus(
+      caseItem?.status,
+    );
+
+  const canResearch =
+    normalizedStatus ===
+    "EVIDENCE_READY";
+
+  const researchRunning =
+    normalizedStatus ===
+    "RESEARCHING";
+
+    normalizedStatus ===
+    "RESEARCHED";
+
+  const canRequestApproval =
+    normalizedStatus ===
+    "ACTION_READY";
+
+  const awaitingApproval =
+    normalizedStatus ===
+    "AWAITING_APPROVAL";
+
+  const actionReady =
+    normalizedStatus ===
+    "ACTION_READY";
+
+  const resolved =
+    normalizedStatus ===
+      "RESOLVED" ||
+    normalizedStatus ===
+      "CLOSED";
+
+  const workflow = useMemo(() => {
+    const currentIndex =
+      WORKFLOW_STATUSES.indexOf(
+        normalizedStatus as WorkflowStatus,
+      );
+
+    return WORKFLOW_STATUSES.map(
+      (status, index) => ({
+        status,
+        index,
+        complete:
+          currentIndex >= 0 &&
+          index < currentIndex,
+        current:
+          status === normalizedStatus,
+      }),
+    );
+  }, [normalizedStatus]);
+
+  const displayAmount =
+    formatAmount(
+      caseItem?.amount,
+      caseItem?.currency,
+    );
 
   if (loading) {
     return (
@@ -386,17 +987,19 @@ export default function CasePage() {
             ← Back to cases
           </Link>
 
-          <div className="mt-20">
-            <p className="text-sm text-[#8a8a86]">
-              Loading case...
-            </p>
+          <div className="mt-20 space-y-4">
+            <div className="h-3 w-24 animate-pulse rounded bg-black/5" />
+
+            <div className="h-12 w-2/3 animate-pulse rounded bg-black/5" />
+
+            <div className="h-5 w-1/2 animate-pulse rounded bg-black/5" />
           </div>
         </div>
       </main>
     );
   }
 
-  if (error && !caseItem) {
+  if (!caseItem) {
     return (
       <main className="min-h-screen bg-[#f7f7f5] px-6 py-8 text-[#171717]">
         <div className="mx-auto max-w-5xl">
@@ -407,13 +1010,14 @@ export default function CasePage() {
             ← Back to cases
           </Link>
 
-          <div className="mt-20 rounded-2xl border border-black/8 bg-white p-8">
+          <div className="mt-20 rounded-2xl border border-black/10 bg-white p-8">
             <p className="font-medium">
               We couldn&apos;t load this case.
             </p>
 
             <p className="mt-2 text-sm text-[#8a8a86]">
-              {error}
+              {error ||
+                "The case does not exist."}
             </p>
           </div>
         </div>
@@ -421,21 +1025,12 @@ export default function CasePage() {
     );
   }
 
-  if (!caseItem) {
-    return null;
-  }
-
-  const canResearch =
-    caseItem.status === "EVIDENCE_READY";
-
-  const canRequestApproval =
-    caseItem.status === "ACTION_READY";
-
   return (
     <main className="min-h-screen bg-[#f7f7f5] text-[#171717]">
-      <div className="mx-auto min-h-screen w-full max-w-5xl px-6 py-8 md:px-10">
+      <div className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10">
 
-        {/* Header */}
+        {/* HEADER */}
+
         <header className="flex items-center justify-between">
           <Link
             href="/"
@@ -445,7 +1040,9 @@ export default function CasePage() {
               ←
             </span>
 
-            <span>Back to cases</span>
+            <span>
+              Back to cases
+            </span>
           </Link>
 
           <div className="flex items-center gap-3">
@@ -465,38 +1062,80 @@ export default function CasePage() {
           </div>
         </header>
 
-        {/* Case heading */}
-        <section className="mt-16">
-          <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
-            <div>
+        {/* HERO */}
+
+        <section className="mt-14">
+          <div className="flex flex-col justify-between gap-6 md:flex-row md:items-start">
+            <div className="min-w-0">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-[#8a8a86]">
                 Case #{caseItem.id}
               </p>
 
-              <h1 className="mt-3 text-4xl font-semibold tracking-[-0.04em] md:text-5xl">
-                {caseItem.title}
+              <h1 className="mt-3 max-w-4xl text-4xl font-semibold tracking-[-0.045em] md:text-5xl">
+                {caseItem.title ||
+                  "Untitled case"}
               </h1>
 
-              <p className="mt-4 max-w-2xl text-base leading-7 text-[#73736e]">
-                {caseItem.description}
+              <p className="mt-4 max-w-3xl text-base leading-7 text-[#73736e]">
+                {caseItem.description ||
+                  "No case description provided."}
               </p>
             </div>
 
-            <StatusPill status={caseItem.status} />
+            <div className="shrink-0">
+              <StatusPill
+                status={
+                  caseItem.status
+                }
+              />
+            </div>
           </div>
         </section>
 
-        {/* Error */}
+        {/* ERROR */}
+
         {error && (
-          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
             {error}
           </div>
         )}
 
-        {/* Primary action */}
-        {(canResearch || canRequestApproval) && (
-          <section className="mt-10">
-            <div className="rounded-2xl border border-black/8 bg-[#171717] p-6 text-white shadow-[0_12px_40px_rgba(0,0,0,0.08)]">
+        {/* WORKFLOW */}
+
+        <section className="mt-10">
+          <div className="overflow-x-auto rounded-2xl border border-black/[0.08] bg-white p-5">
+            <div className="flex min-w-[720px] items-start">
+              {workflow.map(
+                (step) => (
+                  <WorkflowStep
+                    key={
+                      step.status
+                    }
+                    status={
+                      step.status
+                    }
+                    index={
+                      step.index
+                    }
+                    complete={
+                      step.complete
+                    }
+                    current={
+                      step.current
+                    }
+                  />
+                ),
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* PRIMARY ACTION */}
+
+        {(canResearch ||
+          canRequestApproval) && (
+          <section className="mt-8">
+            <div className="rounded-2xl bg-[#171717] p-6 text-white shadow-[0_14px_50px_rgba(0,0,0,0.08)]">
               <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
                 <div>
                   <p className="text-xs font-semibold tracking-[0.16em] text-white/50">
@@ -513,15 +1152,20 @@ export default function CasePage() {
 
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
                     {canResearch
-                      ? "Run focused research to strengthen the case before a decision is made."
-                      : "Review the recommendation before allowing ONIT to proceed."}
+                      ? "ONIT has enough case information to begin focused external research."
+                      : "The recommendation and execution plan are ready for your review."}
                   </p>
                 </div>
 
                 {canResearch && (
                   <button
-                    onClick={runResearch}
-                    disabled={actionLoading}
+                    type="button"
+                    onClick={
+                      runResearch
+                    }
+                    disabled={
+                      actionLoading
+                    }
                     className="shrink-0 rounded-full bg-white px-5 py-3 text-sm font-medium text-[#171717] transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {actionLoading
@@ -532,8 +1176,13 @@ export default function CasePage() {
 
                 {canRequestApproval && (
                   <button
-                    onClick={requestApproval}
-                    disabled={actionLoading}
+                    type="button"
+                    onClick={
+                      requestApproval
+                    }
+                    disabled={
+                      actionLoading
+                    }
                     className="shrink-0 rounded-full bg-white px-5 py-3 text-sm font-medium text-[#171717] transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {actionLoading
@@ -546,14 +1195,39 @@ export default function CasePage() {
           </section>
         )}
 
-        {/* Case information */}
-        <section className="mt-12">
-          <SectionLabel>CASE INFORMATION</SectionLabel>
+        {/* RESEARCHING STATE */}
 
-          <div className="mt-4 grid overflow-hidden rounded-2xl border border-black/8 bg-white sm:grid-cols-2">
+        {researchRunning && (
+          <section className="mt-8">
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-6">
+              <p className="text-xs font-semibold tracking-[0.16em] text-blue-700">
+                RESEARCH IN PROGRESS
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-blue-950">
+                ONIT is researching this case.
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-blue-900/70">
+                External sources are being evaluated against the case facts.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* CASE INFORMATION */}
+
+        <section className="mt-12">
+          <SectionLabel>
+            CASE INFORMATION
+          </SectionLabel>
+
+          <div className="mt-4 grid overflow-hidden rounded-2xl border border-black/[0.08] bg-white sm:grid-cols-2">
             <InfoItem
               label="Passenger"
-              value={caseItem.passenger}
+              value={
+                caseItem.passenger
+              }
             />
 
             <InfoItem
@@ -566,187 +1240,279 @@ export default function CasePage() {
 
             <InfoItem
               label="Booking reference"
-              value={caseItem.booking_reference}
+              value={
+                caseItem.booking_reference
+              }
             />
 
             <InfoItem
               label="Amount"
               value={
-                caseItem.amount
-                  ? `${caseItem.currency ?? ""}${caseItem.amount}`
-                  : null
+                displayAmount
               }
             />
 
             <InfoItem
               label="Cancellation date"
-              value={caseItem.cancellation_date}
+              value={
+                caseItem.cancellation_date
+              }
             />
 
             <InfoItem
               label="Refund received"
               value={
-                caseItem.refund_received === null
+                caseItem.refund_received ===
+                  null ||
+                caseItem.refund_received ===
+                  undefined
                   ? null
-                  : caseItem.refund_received
-                    ? "Yes"
-                    : "No"
+                  : typeof caseItem.refund_received ===
+                      "string"
+                    ? caseItem.refund_received
+                    : caseItem.refund_received
+                      ? "Yes"
+                      : "No"
+              }
+            />
+
+            <InfoItem
+              label="Requested resolution"
+              value={
+                caseItem.requested_resolution
+              }
+            />
+
+            <InfoItem
+              label="Created"
+              value={
+                formatDate(
+                  caseItem.created_at,
+                )
               }
             />
           </div>
         </section>
 
-        {/* Evidence */}
+        {/* EVIDENCE */}
+
         <section className="mt-12">
-          <SectionLabel>EVIDENCE</SectionLabel>
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <SectionLabel>
+                EVIDENCE
+              </SectionLabel>
 
-          <div className="mt-4 flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-4">
-              <p className="text-sm text-[#8a8a86]">
-                Uploaded evidence and extracted facts.
+              <p className="mt-1 text-sm text-[#73736e]">
+                Documents and facts ONIT can use to understand the case.
               </p>
-
-              <div className="flex items-center gap-3">
-                <label className="relative inline-flex cursor-pointer items-center">
-                  <input
-                    type="file"
-                    className="sr-only"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0] ?? null;
-                      if (f) uploadEvidence(f);
-                      e.currentTarget.value = "";
-                    }}
-                  />
-
-                  <span className="rounded-full border border-black/8 bg-white px-4 py-2 text-sm font-medium">
-                    {uploadLoading ? "Uploading..." : "Add evidence"}
-                  </span>
-                </label>
-              </div>
             </div>
 
-            {evidence.length === 0 ? (
-              // fallback to any supporting_facts text if available
-              (caseItem.supporting_facts && (
-                <div className="rounded-2xl border border-black/8 bg-white p-6">
-                  <p className="whitespace-pre-line text-sm leading-7 text-[#595955]">
-                    {caseItem.supporting_facts}
-                  </p>
-                </div>
-              )) || (
-                <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
-                  <p className="text-sm font-medium">
-                    No supporting evidence has been added yet.
+            <label className="relative inline-flex shrink-0 cursor-pointer items-center">
+              <input
+                type="file"
+                className="sr-only"
+                disabled={
+                  uploadLoading
+                }
+                onChange={(
+                  event,
+                ) => {
+                  const file =
+                    event
+                      .target
+                      .files?.[0] ??
+                    null;
+
+                  if (file) {
+                    void uploadEvidence(
+                      file,
+                    );
+                  }
+
+                  event.currentTarget.value =
+                    "";
+                }}
+              />
+
+              <span className="rounded-full border border-black/10 bg-white px-4 py-2.5 text-sm font-medium transition hover:bg-[#fafaf8]">
+                {uploadLoading
+                  ? "Uploading..."
+                  : "+ Add evidence"}
+              </span>
+            </label>
+          </div>
+
+          <div className="mt-4 space-y-4">
+            {evidence.length ===
+            0 ? (
+              caseItem.supporting_facts ? (
+                <div className="rounded-2xl border border-black/[0.08] bg-white p-6">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a8a86]">
+                    Supporting facts
                   </p>
 
-                    <p className="mt-2 text-sm leading-6 text-[#8a8a86]">
-                    Use the Add evidence button to upload a document or paste text.
+                  <p className="mt-3 whitespace-pre-line text-sm leading-7 text-[#595955]">
+                    {
+                      caseItem.supporting_facts
+                    }
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
+                  <p className="text-sm font-medium">
+                    No evidence has been uploaded yet.
+                  </p>
+
+                  <p className="mt-2 text-sm leading-6 text-[#8a8a86]">
+                    Add a document and ONIT will extract the facts it can use.
                   </p>
                 </div>
               )
             ) : (
-              <div className="mt-2 space-y-4">
-                {evidence.map((ev) => (
-                  <div
-                    key={ev.id}
-                    className="rounded-2xl border border-black/8 bg-white p-6"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-semibold">
-                          {ev.filename ?? (ev.evidence_type ?? "Text input")}
-                        </p>
+              evidence.map(
+                (item) => {
+                  const facts =
+                    item.extracted_facts;
 
-                        <p className="mt-2 text-xs text-[#8a8a86]">
-                          {ev.evidence_type ? ev.evidence_type.toUpperCase() : "TEXT"} · {ev.mimetype ?? "-"}
-                        </p>
-                      </div>
+                  const factEntries =
+                    facts &&
+                    typeof facts ===
+                      "object"
+                      ? Object.entries(
+                          facts,
+                        )
+                      : [];
 
-                      <div className="text-right text-xs text-[#a0a09b]">
-                        {formatDate(ev.created_at)}
-                      </div>
-                    </div>
+                  return (
+                    <div
+                      key={
+                        item.id
+                      }
+                      className="rounded-2xl border border-black/[0.08] bg-white p-6"
+                    >
+                      <div className="flex flex-col justify-between gap-3 sm:flex-row">
+                        <div>
+                          <p className="text-sm font-semibold">
+                            {item.filename ??
+                              item.evidence_type ??
+                              "Text evidence"}
+                          </p>
 
-                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                      {ev.extracted_facts ? (
-                        Object.entries(ev.extracted_facts).map(([k, v]) => {
-                          const display = Array.isArray(v)
-                            ? (v as string[]).join("; ")
-                            : v == null
-                              ? "—"
-                              : String(v);
-
-                          return (
-                            <div key={k} className="rounded-md bg-[#f7f7f5] p-3">
-                              <p className="text-xs text-[#8a8a86]">{k.replaceAll("_", " ")}</p>
-                              <p className="mt-1 text-sm text-[#454542]">{display}</p>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="rounded-md bg-[#f7f7f5] p-3">
-                          <p className="text-sm text-[#595955]">No extracted facts.</p>
+                          <p className="mt-1 text-xs text-[#8a8a86]">
+                            {(
+                              item.evidence_type ??
+                              "TEXT"
+                            ).toUpperCase()}
+                            {" · "}
+                            {item.mimetype ??
+                              "text"}
+                          </p>
                         </div>
-                      )}
-                    </div>
 
-                    <div className="mt-4 flex items-center gap-3">
-                      <span className="rounded-full bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
-                        {ev.extraction_status ?? "UNKNOWN"}
-                      </span>
+                        <span className="text-xs text-[#a0a09b]">
+                          {formatDate(
+                            item.created_at,
+                          )}
+                        </span>
+                      </div>
 
-                      {ev.extracted_facts && typeof ev.extracted_facts === "object" && ev.extracted_facts !== null && ("booking_reference" in ev.extracted_facts) && !!(ev.extracted_facts as Record<string, unknown>)["booking_reference"] && (
-                        <a
-                          href={`#`}
-                          onClick={(e) => e.preventDefault()}
-                          className="ml-auto text-sm font-medium text-[#171717]"
-                        >
-                          View source
-                        </a>
-                      )}
+                      <div className="mt-5">
+                        {factEntries.length >
+                        0 ? (
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {factEntries.map(
+                              ([
+                                key,
+                                value,
+                              ]) => (
+                                <div
+                                  key={
+                                    key
+                                  }
+                                  className="rounded-xl bg-[#f7f7f5] p-4"
+                                >
+                                  <p className="text-xs text-[#8a8a86]">
+                                    {formatLabel(
+                                      key,
+                                    )}
+                                  </p>
+
+                                  <p className="mt-1 whitespace-pre-line text-sm leading-6 text-[#454542]">
+                                    {formatUnknownValue(
+                                      value,
+                                    )}
+                                  </p>
+                                </div>
+                              ),
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-[#8a8a86]">
+                            No extracted facts available.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="mt-5">
+                        <span className="rounded-full bg-zinc-50 px-3 py-1.5 text-xs text-zinc-600">
+                          {item.extraction_status ??
+                            "Unknown status"}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  );
+                },
+              )
             )}
           </div>
         </section>
 
-        {/* Analysis */}
+        {/* ASSESSMENT */}
+
         {(caseItem.issue ||
           caseItem.recommended_action ||
+          caseItem.priority ||
           caseItem.decision_reason) && (
           <section className="mt-12">
             <SectionLabel>
               ONIT&apos;S ASSESSMENT
             </SectionLabel>
 
-            <div className="mt-4 overflow-hidden rounded-2xl border border-black/8 bg-white">
+            <div className="mt-4 overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
               {caseItem.issue && (
                 <AssessmentRow
                   label="Issue"
-                  value={caseItem.issue}
+                  value={
+                    caseItem.issue
+                  }
                 />
               )}
 
               {caseItem.recommended_action && (
                 <AssessmentRow
                   label="Recommended action"
-                  value={caseItem.recommended_action}
+                  value={
+                    caseItem.recommended_action
+                  }
                 />
               )}
 
               {caseItem.priority && (
                 <AssessmentRow
                   label="Priority"
-                  value={formatStatus(caseItem.priority)}
+                  value={formatStatus(
+                    caseItem.priority,
+                  )}
                 />
               )}
 
               {caseItem.decision_reason && (
                 <AssessmentRow
                   label="Why"
-                  value={caseItem.decision_reason}
+                  value={
+                    caseItem.decision_reason
+                  }
                   last
                 />
               )}
@@ -754,190 +1520,302 @@ export default function CasePage() {
           </section>
         )}
 
-        {/* Research */}
-        <section className="mt-12">
-          <SectionLabel>RESEARCH</SectionLabel>
+        {/* RESEARCH */}
 
-          {research.length === 0 ? (
+        <section className="mt-12">
+          <SectionLabel>
+            EXTERNAL RESEARCH
+          </SectionLabel>
+
+          <p className="mt-1 text-sm text-[#73736e]">
+            Sources ONIT used to validate the case and support its decision.
+          </p>
+
+          {research.length ===
+          0 ? (
             <div className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
               <p className="text-sm font-medium">
-                No research recorded yet.
+                No external research recorded yet.
               </p>
 
               <p className="mt-2 text-sm leading-6 text-[#8a8a86]">
-                ONIT will store the sources it uses as the case
-                moves forward.
+                {canResearch
+                  ? "Research is ready to run."
+                  : "ONIT will record its sources here once research is performed."}
               </p>
             </div>
           ) : (
             <div className="mt-4 space-y-4">
-              {research.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-2xl border border-black/8 bg-white p-6"
-                >
-                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a8a86]">
-                        {item.source}
-                      </p>
+              {research.map(
+                (item) => {
+                  const domain =
+                    getDomain(
+                      item.url,
+                      item.source,
+                    );
 
-                      <h3 className="mt-2 text-lg font-semibold">
-                        {item.title}
-                      </h3>
+                  return (
+                    <div
+                      key={
+                        item.id
+                      }
+                      className="rounded-2xl border border-black/[0.08] bg-white p-6"
+                    >
+                      <div className="flex flex-col justify-between gap-4 sm:flex-row">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-[#f7f7f5] px-3 py-1 text-xs font-medium text-[#73736e]">
+                              {item.source ??
+                                "External source"}
+                            </span>
+
+                            <span className="text-xs text-[#a0a09b]">
+                              {
+                                domain
+                              }
+                            </span>
+                          </div>
+
+                          <h3 className="mt-3 text-lg font-semibold">
+                            {item.title ??
+                              "Untitled source"}
+                          </h3>
+                        </div>
+
+                        {item.url && (
+                          <a
+                            href={
+                              item.url
+                            }
+                            target="_blank"
+                            rel="noreferrer"
+                            className="shrink-0 text-sm font-medium text-[#171717] underline decoration-black/20 underline-offset-4 hover:decoration-black"
+                          >
+                            Open source ↗
+                          </a>
+                        )}
+                      </div>
+
+                      {item.summary && (
+                        <p className="mt-4 text-sm leading-7 text-[#595955]">
+                          {
+                            item.summary
+                          }
+                        </p>
+                      )}
+
+                      <div className="mt-5 rounded-xl bg-[#f7f7f5] p-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#8a8a86]">
+                          Why it matters
+                        </p>
+
+                        <p className="mt-2 text-sm leading-6 text-[#595955]">
+                          {item.relevance &&
+                          ![
+                            "low",
+                            "medium",
+                            "high",
+                          ].includes(
+                            item.relevance.toLowerCase(),
+                          )
+                            ? item.relevance
+                            : "This source was identified as relevant to the case and used as supporting research."}
+                        </p>
+
+                        {item.relevance &&
+                          [
+                            "low",
+                            "medium",
+                            "high",
+                          ].includes(
+                            item.relevance.toLowerCase(),
+                          ) && (
+                            <p className="mt-3 text-xs text-[#8a8a86]">
+                              Relevance:{" "}
+                              <span className="font-medium text-[#595955]">
+                                {getRelevanceLabel(
+                                  item.relevance,
+                                )}
+                              </span>
+                            </p>
+                          )}
+                      </div>
                     </div>
-
-                    <span className="text-xs text-[#a0a09b]">
-                      {formatDate(item.created_at)}
-                    </span>
-                  </div>
-
-                  <p className="mt-4 text-sm leading-7 text-[#595955]">
-                    {item.summary}
-                  </p>
-
-                  <div className="mt-5 rounded-xl bg-[#f7f7f5] p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#8a8a86]">
-                      Relevance
-                    </p>
-
-                    <p className="mt-2 text-sm leading-6 text-[#595955]">
-                      {item.relevance}
-                    </p>
-                  </div>
-                </div>
-              ))}
+                  );
+                },
+              )}
             </div>
           )}
         </section>
 
-        {/* Evidence Trail (provenance) */}
+        {/* EVIDENCE TRAIL */}
+
         <section className="mt-12">
-          <SectionLabel>EVIDENCE TRAIL</SectionLabel>
+          <SectionLabel>
+            EVIDENCE TRAIL
+          </SectionLabel>
 
-          <div className="mt-4 rounded-2xl border border-black/8 bg-white p-6">
-            <p className="text-sm text-[#595955]">Why ONIT reached this decision</p>
-
-            <div className="mt-4 grid gap-6 md:grid-cols-[1fr_320px]">
+          <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-6">
+            <div className="grid gap-8 lg:grid-cols-[1fr_300px]">
               <div>
-                <h4 className="text-sm font-semibold">CASE FACTS</h4>
-                <ul className="mt-2 space-y-1 text-sm text-[#454542]">
-                  {caseItem.refund_received !== null && (
-                    <li>Refund received: {caseItem.refund_received ? "Yes" : "No"}</li>
-                  )}
+                <p className="text-sm font-medium">
+                  How ONIT moved from information to a decision.
+                </p>
 
-                  {caseItem.cancellation_date && (
-                    <li>Cancellation date: {caseItem.cancellation_date}</li>
-                  )}
+                <div className="mt-6 space-y-6">
 
-                  {caseItem.requested_resolution && (
-                    <li>Requested resolution: {caseItem.requested_resolution}</li>
-                  )}
-                </ul>
+                  <Step
+                    number="1"
+                    title="Case facts"
+                    description="Information supplied directly through the case."
+                    state="complete"
+                  />
 
-                <div className="my-4 flex items-center justify-center text-sm text-[#8a8a86]">↓</div>
+                  <Step
+                    number="2"
+                    title="Evidence"
+                    description={
+                      evidence.length >
+                      0
+                        ? `${evidence.length} evidence item${
+                            evidence.length ===
+                            1
+                              ? ""
+                              : "s"
+                          } available.`
+                        : "No uploaded evidence yet."
+                    }
+                    state={
+                      evidence.length >
+                      0
+                        ? "complete"
+                        : normalizedStatus ===
+                            "EVIDENCE_READY"
+                          ? "current"
+                          : "upcoming"
+                    }
+                  />
 
-                <h4 className="text-sm font-semibold">UPLOADED EVIDENCE</h4>
+                  <Step
+                    number="3"
+                    title="External research"
+                    description={
+                      research.length >
+                      0
+                        ? `${research.length} source${
+                            research.length ===
+                            1
+                              ? ""
+                              : "s"
+                          } recorded.`
+                        : researchRunning
+                          ? "ONIT is currently researching this case."
+                          : "No external research recorded yet."
+                    }
+                    state={
+                      research.length >
+                      0
+                        ? "complete"
+                        : researchRunning ||
+                            canResearch
+                          ? "current"
+                          : "upcoming"
+                    }
+                  />
 
-                {evidence.length === 0 ? (
-                  <p className="mt-2 text-sm text-[#8a8a86]">No uploaded evidence yet.</p>
-                ) : (
-                  <div className="mt-2 space-y-3">
-                    {evidence.map((ev) => (
-                      <div key={ev.id} className="rounded-md border border-black/6 p-3">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium">{ev.filename ?? (ev.evidence_type ?? 'Text input')}</p>
-                          <span className="text-xs text-[#8a8a86]">{formatDate(ev.created_at)}</span>
-                        </div>
+                  <Step
+                    number="4"
+                    title="Decision"
+                    description={
+                      caseItem.recommended_action ??
+                      "ONIT has not produced a recommendation yet."
+                    }
+                    state={
+                      caseItem.recommended_action
+                        ? "complete"
+                        : "upcoming"
+                    }
+                  />
 
-                        <div className="mt-2 text-sm text-[#595955]">
-                          {ev.extracted_facts ? (
-                            <ul className="space-y-1">
-                              {Object.entries(ev.extracted_facts as Record<string, unknown>).map(([k, v]) => (
-                                <li key={k}>
-                                  <span className="font-medium">{k.replaceAll("_", " ")}: </span>
-                                  <span>{Array.isArray(v) ? (v as string[]).join('; ') : String(v ?? '—')}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p className="text-sm text-[#8a8a86]">No extracted facts.</p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="my-4 flex items-center justify-center text-sm text-[#8a8a86]">↓</div>
-
-                <h4 className="text-sm font-semibold">EXTERNAL RESEARCH</h4>
-
-                {research.length === 0 ? (
-                  <p className="mt-2 text-sm text-[#8a8a86]">No external research recorded yet.</p>
-                ) : (
-                  <div className="mt-2 space-y-3">
-                    {research.map((r) => {
-                      const url = r.url ?? '';
-                      const domain = (url.split('/')[2] || r.source || '').toLowerCase();
-                      const isGov = domain.includes('.gov') || (r.source || '').toLowerCase().includes('gov');
-                      const isAirline = caseItem.airline ? domain.includes((caseItem.airline || '').toLowerCase()) || (r.source || '').toLowerCase().includes((caseItem.airline || '').toLowerCase()) : false;
-                      const classification = isGov ? 'OFFICIAL' : isAirline ? 'AIRLINE' : 'OTHER';
-
-                      return (
-                        <div key={r.id} className="rounded-md border border-black/6 p-3">
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <p className="text-sm font-medium">{r.title}</p>
-                              <p className="mt-1 text-xs text-[#8a8a86]">{classification} · {r.relevance}</p>
-                            </div>
-
-                            <div className="text-right">
-                              {r.url ? (
-                                <a href={r.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-[#171717]">Open</a>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          <p className="mt-2 text-sm text-[#595955]">{r.summary}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                  <Step
+                    number="5"
+                    title="Human approval"
+                    description={
+                      awaitingApproval
+                        ? "Your review is required before proceeding."
+                        : actionReady ||
+                            resolved
+                          ? "Human approval has been recorded."
+                          : "Approval will be requested when the action is ready."
+                    }
+                    state={
+                      actionReady ||
+                      resolved
+                        ? "complete"
+                        : awaitingApproval
+                          ? "current"
+                          : "upcoming"
+                    }
+                  />
+                </div>
               </div>
 
               <aside>
-                <div className="rounded-md bg-[#f7f7f5] p-4">
-                  <h5 className="text-sm font-semibold">ONIT DECISION</h5>
-                  <p className="mt-2 text-sm text-[#454542]">{caseItem.recommended_action ?? 'No recommendation yet.'}</p>
+                <div className="rounded-2xl bg-[#f7f7f5] p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a8a86]">
+                    Decision support
+                  </p>
 
-                  <div className="mt-4">
-                    <p className="text-xs text-[#8a8a86]">Evidence strength</p>
-                    <p className="mt-1 text-sm font-medium">
-                      {evidence.length > 0 && research.length > 0 ? 'Strong' : (evidence.length > 0 || research.length > 0 ? 'Moderate' : 'Insufficient')}
+                  <p className="mt-3 text-sm font-medium leading-6">
+                    {caseItem.recommended_action ??
+                      "No recommendation yet."}
+                  </p>
+
+                  <div className="mt-5">
+                    <p className="text-xs text-[#8a8a86]">
+                      Evidence strength
                     </p>
+
+                    <div className="mt-2">
+                      <EvidenceStrength
+                        evidenceCount={
+                          evidence.length
+                        }
+                        researchCount={
+                          research.length
+                        }
+                      />
+                    </div>
                   </div>
 
-                  <div className="mt-4">
-                    <p className="text-xs text-[#8a8a86]">Decision supported by</p>
-                    <ul className="mt-2 space-y-2 text-sm text-[#454542]">
-                      {caseItem.refund_received !== null && (
-                        <li>✓ Refund received: {caseItem.refund_received ? 'Yes' : 'No'}{evidence.some(ev => (ev.extracted_facts && ((ev.extracted_facts as Record<string, unknown>)['refund_received'] !== undefined))) ? ' — uploaded evidence' : ''}</li>
-                      )}
+                  <div className="mt-5 border-t border-black/[0.06] pt-5">
+                    <p className="text-xs text-[#8a8a86]">
+                      Supporting material
+                    </p>
 
-                      {caseItem.cancellation_date && (
-                        <li>✓ Cancellation date: {caseItem.cancellation_date}{evidence.some(ev => ev.extracted_facts && (ev.extracted_facts as Record<string, unknown>)['cancellation_date']) ? ' — uploaded evidence' : ''}</li>
-                      )}
+                    <div className="mt-3 space-y-2 text-sm text-[#454542]">
+                      <p>
+                        {
+                          evidence.length
+                        }{" "}
+                        evidence{" "}
+                        {evidence.length ===
+                        1
+                          ? "item"
+                          : "items"}
+                      </p>
 
-                      {caseItem.requested_resolution && (
-                        <li>✓ Requested resolution: {caseItem.requested_resolution}{evidence.some(ev => ev.extracted_facts && (ev.extracted_facts as Record<string, unknown>)['requested_resolution']) ? ' — uploaded evidence' : ''}</li>
-                      )}
-
-                      {research.slice(0, 3).map(r => (
-                        <li key={`sup-${r.id}`}>✓ {r.title} — {((r.url && r.url.includes('.gov')) ? 'Official source' : 'External source')}</li>
-                      ))}
-                    </ul>
+                      <p>
+                        {
+                          research.length
+                        }{" "}
+                        research{" "}
+                        {research.length ===
+                        1
+                          ? "source"
+                          : "sources"}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </aside>
@@ -945,227 +1823,352 @@ export default function CasePage() {
           </div>
         </section>
 
-        {/* Plan */}
+        {/* PLAN */}
+
         {(caseItem.plan_summary ||
           caseItem.plan_steps) && (
           <section className="mt-12">
-            <SectionLabel>PLAN</SectionLabel>
+            <SectionLabel>
+              EXECUTION PLAN
+            </SectionLabel>
 
-            <div className="mt-4 rounded-2xl border border-black/8 bg-white p-6">
+            <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-6">
               {caseItem.plan_summary && (
-                <p className="text-base font-medium leading-7">
-                  {caseItem.plan_summary}
+                <p className="text-lg font-medium leading-7">
+                  {
+                    caseItem.plan_summary
+                  }
                 </p>
               )}
 
               {caseItem.plan_steps && (
-                <p className="mt-4 whitespace-pre-line text-sm leading-7 text-[#595955]">
-                  {caseItem.plan_steps}
-                </p>
+                <div className="mt-5 whitespace-pre-line rounded-xl bg-[#f7f7f5] p-5 text-sm leading-7 text-[#454542]">
+                  {
+                    caseItem.plan_steps
+                  }
+                </div>
               )}
             </div>
           </section>
         )}
 
-        {/* Activity */}
-        <section className="mt-12">
-          <SectionLabel>ACTIVITY</SectionLabel>
+        {/* HUMAN REVIEW */}
 
-          <div className="mt-4 rounded-2xl border border-black/8 bg-white p-6">
-            {activities.length === 0 ? (
+        {awaitingApproval &&
+          caseItem.approval_required !==
+            false && (
+            <section className="mt-12">
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+                <div className="flex flex-col justify-between gap-6 md:flex-row md:items-start">
+                  <div>
+                    <p className="text-xs font-semibold tracking-[0.16em] text-amber-700">
+                      HUMAN REVIEW REQUIRED
+                    </p>
+
+                    <h2 className="mt-2 text-xl font-semibold text-amber-950">
+                      ONIT is ready for your decision.
+                    </h2>
+
+                    <p className="mt-3 max-w-2xl text-sm leading-6 text-amber-900/70">
+                      ONIT has completed the available analysis and prepared an execution plan. Nothing will proceed without your approval.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowReview(
+                        (value) =>
+                          !value,
+                      )
+                    }
+                    className="shrink-0 rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white transition hover:bg-[#30302d]"
+                  >
+                    {showReview
+                      ? "Close review"
+                      : "Review & approve"}
+                  </button>
+                </div>
+
+                {showReview && (
+                  <div className="mt-6 rounded-2xl border border-amber-900/10 bg-white p-6">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a8a86]">
+                      Final review
+                    </p>
+
+                    <div className="mt-5 space-y-5">
+
+                      <div>
+                        <p className="text-xs text-[#8a8a86]">
+                          Decision
+                        </p>
+
+                        <p className="mt-1 text-sm font-medium leading-6">
+                          {caseItem.recommended_action ??
+                            "No recommendation provided."}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-xs text-[#8a8a86]">
+                          Why
+                        </p>
+
+                        <p className="mt-1 whitespace-pre-line text-sm leading-6 text-[#454542]">
+                          {caseItem.decision_reason ??
+                            "No decision reason provided."}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-xs text-[#8a8a86]">
+                          Execution plan
+                        </p>
+
+                        <p className="mt-1 whitespace-pre-line text-sm leading-6 text-[#454542]">
+                          {caseItem.plan_steps ??
+                            caseItem.plan_summary ??
+                            "No execution plan provided."}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+
+                        <div className="rounded-xl bg-[#f7f7f5] p-4">
+                          <p className="text-xs text-[#8a8a86]">
+                            Evidence
+                          </p>
+
+                          <p className="mt-1 text-sm font-medium">
+                            {
+                              evidence.length
+                            }{" "}
+                            {evidence.length ===
+                            1
+                              ? "item"
+                              : "items"}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-[#f7f7f5] p-4">
+                          <p className="text-xs text-[#8a8a86]">
+                            Research
+                          </p>
+
+                          <p className="mt-1 text-sm font-medium">
+                            {
+                              research.length
+                            }{" "}
+                            {research.length ===
+                            1
+                              ? "source"
+                              : "sources"}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-[#f7f7f5] p-4">
+                          <p className="text-xs text-[#8a8a86]">
+                            Strength
+                          </p>
+
+                          <div className="mt-2">
+                            <EvidenceStrength
+                              evidenceCount={
+                                evidence.length
+                              }
+                              researchCount={
+                                research.length
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-3 border-t border-black/[0.06] pt-5">
+                        <button
+                          type="button"
+                          onClick={
+                            approveAction
+                          }
+                          disabled={
+                            approving
+                          }
+                          className="rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white transition hover:bg-[#30302d] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {approving
+                            ? "Approving..."
+                            : "Approve & continue →"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowReview(
+                              false,
+                            )
+                          }
+                          disabled={
+                            approving
+                          }
+                          className="rounded-full border border-black/10 bg-white px-5 py-3 text-sm font-medium text-[#595955] disabled:opacity-50"
+                        >
+                          Keep reviewing
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+        {/* ACTION READY */}
+
+        {actionReady && (
+          <section className="mt-12">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-semibold text-white">
+                  ✓
+                </div>
+
+                <div>
+                  <p className="text-xs font-semibold tracking-[0.16em] text-emerald-700">
+                    ACTION READY
+                  </p>
+
+                  <h2 className="mt-2 text-xl font-semibold text-emerald-950">
+                    Action is ready for human approval.
+                  </h2>
+
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-900/70">
+                    ONIT has prepared the action below. Human approval is required before execution.
+                  </p>
+
+                  <div className="mt-5 rounded-xl border border-emerald-900/10 bg-white p-5">
+                    <p className="text-xs uppercase tracking-[0.1em] text-[#8a8a86]">
+                      Proposed action
+                    </p>
+
+                    <p className="mt-2 text-sm font-semibold">
+                      {caseItem.recommended_action ??
+                        "No action provided."}
+                    </p>
+
+                    {(caseItem.plan_steps ||
+                      caseItem.plan_summary) && (
+                      <p className="mt-4 whitespace-pre-line text-sm leading-7 text-[#454542]">
+                        {caseItem.plan_steps ??
+                          caseItem.plan_summary}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* RESOLVED */}
+
+        {resolved && (
+          <section className="mt-12">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
+              <p className="text-xs font-semibold tracking-[0.16em] text-emerald-700">
+                RESOLUTION
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-emerald-950">
+                This case has been resolved.
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-emerald-900/70">
+                ONIT has recorded the case as complete.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* ACTIVITY */}
+
+        <section className="mt-12">
+          <SectionLabel>
+            ACTIVITY
+          </SectionLabel>
+
+          <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-6">
+            {activities.length ===
+            0 ? (
               <p className="text-sm text-[#8a8a86]">
                 No activity recorded yet.
               </p>
             ) : (
               <div className="space-y-6">
-                {activities.map((activity, index) => (
-                  <div
-                    key={activity.id}
-                    className="flex gap-4"
-                  >
-                    <div className="flex flex-col items-center">
-                      <span
-                        className={`mt-1.5 h-2.5 w-2.5 rounded-full ${
-                          index === activities.length - 1
-                            ? "bg-amber-500"
-                            : "bg-emerald-500"
-                        }`}
-                      />
+                {activities.map(
+                  (
+                    activity,
+                    index,
+                  ) => (
+                    <div
+                      key={
+                        activity.id
+                      }
+                      className="flex gap-4"
+                    >
+                      <div className="flex flex-col items-center">
+                        <span
+                          className={[
+                            "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
+                            index ===
+                            activities.length -
+                              1
+                              ? "bg-amber-500"
+                              : "bg-emerald-500",
+                          ].join(" ")}
+                        />
 
-                      {index !== activities.length - 1 && (
-                        <span className="mt-2 h-full w-px bg-black/8" />
-                      )}
-                    </div>
-
-                    <div className="min-w-0 flex-1 pb-1">
-                      <div className="flex flex-col justify-between gap-1 sm:flex-row">
-                        <p className="text-sm font-medium">
-                          {formatStatus(activity.event_type)}
-                        </p>
-
-                        <span className="text-xs text-[#a0a09b]">
-                          {formatDate(activity.created_at)}
-                        </span>
+                        {index !==
+                          activities.length -
+                            1 && (
+                          <span className="mt-2 h-full w-px bg-black/[0.08]" />
+                        )}
                       </div>
 
-                      <p className="mt-1 text-sm leading-6 text-[#73736e]">
-                        {activity.message}
-                      </p>
+                      <div className="min-w-0 flex-1 pb-1">
+                        <div className="flex flex-col justify-between gap-1 sm:flex-row">
+                          <p className="text-sm font-medium">
+                            {formatStatus(
+                              activity.event_type,
+                            )}
+                          </p>
+
+                          <span className="text-xs text-[#a0a09b]">
+                            {formatDate(
+                              activity.created_at,
+                            )}
+                          </span>
+                        </div>
+
+                        <p className="mt-1 text-sm leading-6 text-[#73736e]">
+                          {
+                            activity.message
+                          }
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
             )}
           </div>
         </section>
 
-        {/* Human review / approval */}
-        {caseItem.status === "AWAITING_APPROVAL" && caseItem.approval_required && (
-          <section className="mt-12">
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
-              <p className="text-xs font-semibold tracking-[0.14em] text-amber-700">
-                HUMAN REVIEW REQUIRED
-              </p>
+        {/* FOOTER */}
 
-              <h2 className="mt-2 text-xl font-semibold text-amber-950">
-                ONIT has completed its analysis and prepared an execution plan.
-              </h2>
-
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-amber-900/70">
-                <strong>Decision</strong>
-                <br />
-                {caseItem.recommended_action ?? "(No decision)"}
-              </p>
-
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-amber-900/70">
-                <strong>Why</strong>
-                <br />
-                {caseItem.decision_reason ?? "No reason provided."}
-              </p>
-
-              <div className="mt-4 max-w-2xl">
-                <p className="text-sm font-semibold">Execution plan</p>
-                <div className="mt-2 whitespace-pre-line text-sm text-[#171717]">{caseItem.plan_steps ?? caseItem.plan_summary ?? "No plan provided."}</div>
-              </div>
-
-              <div className="mt-5 flex flex-wrap gap-3">
-                {!showReview ? (
-                  <button
-                    onClick={() => setShowReview(true)}
-                    disabled={actionLoading}
-                    className="rounded-full bg-white px-5 py-3 text-sm font-medium text-[#171717]"
-                  >
-                    Review &amp; Approve
-                  </button>
-                ) : (
-                  <div className="w-full rounded-2xl border border-black/8 bg-white p-4">
-                    <p className="text-sm font-medium">Review this action before approving.</p>
-
-                    <div className="mt-3 space-y-2 text-sm text-[#454542]">
-                      <p><strong>Decision:</strong> {caseItem.recommended_action ?? '—'}</p>
-                      <p><strong>Why:</strong> {caseItem.decision_reason ?? '—'}</p>
-                      <p><strong>Evidence strength:</strong> {evidence.length > 0 && research.length > 0 ? 'Strong' : (evidence.length > 0 || research.length > 0 ? 'Moderate' : 'Insufficient')}</p>
-                      <p><strong>Supporting evidence:</strong> {evidence.length > 0 ? `${evidence.length} items` : 'None'}</p>
-                      <p><strong>Research sources:</strong> {research.length > 0 ? `${research.length} sources` : 'None'}</p>
-                    </div>
-
-                    <div className="mt-4 flex gap-3">
-                      <button
-                        onClick={approveAction}
-                        disabled={approving}
-                        className="rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {approving ? 'Approving...' : 'Approve & Continue'}
-                      </button>
-
-                      <button
-                        onClick={() => setShowReview(false)}
-                        disabled={approving}
-                        className="rounded-full border border-amber-900/10 bg-white px-5 py-3 text-sm font-medium text-amber-900"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* Show ACTION_READY after approval */}
-        {caseItem.status === "ACTION_READY" && (
-          <section className="mt-12">
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
-              <p className="text-xs font-semibold tracking-[0.14em] text-emerald-700">ACTION READY</p>
-
-              <h2 className="mt-2 text-xl font-semibold text-emerald-950">Ready for execution</h2>
-
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-900/70">
-                Human approval has been recorded. ONIT prepared the following action:
-              </p>
-
-              <div className="mt-4 max-w-2xl">
-                <p className="text-sm font-semibold">{caseItem.recommended_action ?? 'No action provided.'}</p>
-
-                <div className="mt-3 whitespace-pre-line text-sm text-[#171717]">{caseItem.plan_steps ?? caseItem.plan_summary ?? 'No plan provided.'}</div>
-              </div>
-
-              <p className="mt-4 text-sm text-emerald-900/80">Approved by human review.</p>
-            </div>
-          </section>
-        )}
-
-        <footer className="mt-16 border-t border-black/6 py-8 text-xs text-[#a0a09b]">
+        <footer className="mt-16 border-t border-black/[0.06] py-8 text-xs text-[#a0a09b]">
           ONIT · Your problems, moving forward.
         </footer>
       </div>
     </main>
-  );
-}
-
-function InfoItem({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | null;
-}) {
-  return (
-    <div className="border-b border-black/6 p-5 last:border-b-0 sm:nth-[even]:border-l">
-      <p className="text-xs text-[#8a8a86]">
-        {label}
-      </p>
-
-      <p className="mt-1 text-sm font-medium">
-        {value ?? "Not available"}
-      </p>
-    </div>
-  );
-}
-
-function AssessmentRow({
-  label,
-  value,
-  last = false,
-}: {
-  label: string;
-  value: string;
-  last?: boolean;
-}) {
-  return (
-    <div
-      className={`grid gap-2 p-5 sm:grid-cols-[180px_1fr] ${
-        last ? "" : "border-b border-black/6"
-      }`}
-    >
-      <p className="text-xs font-medium uppercase tracking-[0.08em] text-[#8a8a86]">
-        {label}
-      </p>
-
-      <p className="text-sm leading-6 text-[#454542]">
-        {value}
-      </p>
-    </div>
   );
 }

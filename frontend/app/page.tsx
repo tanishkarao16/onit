@@ -13,7 +13,9 @@ type CaseItem = {
   status: string;
 };
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://127.0.0.1:8000";
 
 function StatusDot({ status }: { status: string }) {
   const priority =
