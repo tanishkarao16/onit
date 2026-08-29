@@ -31,12 +31,26 @@ def _lower(value) -> str:
 
 
 def _contains_any(text: str, keywords: list[str]) -> bool:
-    text = text.lower()
+    text = _lower(text)
 
     return any(
         keyword.lower() in text
         for keyword in keywords
     )
+
+
+def _facts_to_text(facts) -> str:
+    if facts is None:
+        return ""
+
+    if isinstance(facts, list):
+        return " ".join(
+            _text(item)
+            for item in facts
+            if item
+        )
+
+    return _text(facts)
 
 
 # ============================================================
@@ -46,7 +60,7 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 def decide_case(case: Case) -> CaseDecision:
 
     # --------------------------------------------------------
-    # COLLECT ALL AVAILABLE INFORMATION
+    # COLLECT AVAILABLE INFORMATION
     # --------------------------------------------------------
 
     description = _lower(
@@ -93,6 +107,10 @@ def decide_case(case: Case) -> CaseDecision:
         [],
     )
 
+    facts_text = _facts_to_text(
+        supporting_facts
+    ).lower()
+
     # --------------------------------------------------------
     # BUILD SEARCHABLE CASE TEXT
     # --------------------------------------------------------
@@ -107,11 +125,7 @@ def decide_case(case: Case) -> CaseDecision:
             cancellation_date.lower(),
             amount.lower(),
             requested_resolution.lower(),
-            " ".join(
-                str(x).lower()
-                for x in supporting_facts
-                if x
-            ),
+            facts_text,
         ]
     )
 
@@ -122,6 +136,7 @@ def decide_case(case: Case) -> CaseDecision:
     cancellation_keywords = [
         "cancelled",
         "canceled",
+        "cancellation",
         "flight cancellation",
         "flight was cancelled",
         "flight was canceled",
@@ -147,9 +162,12 @@ def decide_case(case: Case) -> CaseDecision:
         "passenger",
     ]
 
-    is_cancellation = _contains_any(
-        searchable_text,
-        cancellation_keywords,
+    is_cancellation = (
+        _contains_any(
+            searchable_text,
+            cancellation_keywords,
+        )
+        or bool(cancellation_date)
     )
 
     is_refund_issue = _contains_any(
@@ -157,10 +175,20 @@ def decide_case(case: Case) -> CaseDecision:
         refund_keywords,
     )
 
-    is_flight_case = _contains_any(
-        searchable_text,
-        flight_keywords,
+    is_flight_case = (
+        _contains_any(
+            searchable_text,
+            flight_keywords,
+        )
+        or bool(airline)
+        or bool(flight_number)
+        or bool(booking_reference)
+        or bool(cancellation_date)
     )
+
+    # ========================================================
+    # CANCELLED FLIGHT + REFUND NOT RECEIVED
+    # ========================================================
 
     if (
         is_cancellation
@@ -180,23 +208,30 @@ def decide_case(case: Case) -> CaseDecision:
                 priority="medium",
                 reason=(
                     "The case concerns a cancelled flight "
-                    "and indicates that a refund was received. "
-                    "The next step is to verify the refund."
+                    "and indicates that a refund was received."
                 ),
             )
 
+        amount_text = (
+            f" for {amount}"
+            if amount
+            else ""
+        )
+
         return CaseDecision(
-            issue="Flight cancellation refund not received",
+            issue="Cancelled flight with refund not received",
             recommended_action=(
-                "Research the applicable airline refund "
-                "policy and passenger rights, verify "
-                "eligibility, and prepare a refund request."
+                (
+    "Verify the passenger's refund eligibility, "
+    "contact the airline to request the applicable "
+    "refund, and follow up until a response is received."
+)
             ),
             priority="high",
             reason=(
                 "The available case information indicates "
-                "that a flight was cancelled and the passenger "
-                "has not received the expected refund."
+                f"that a flight was cancelled and the passenger "
+                f"has not received the expected refund{amount_text}."
             ),
         )
 

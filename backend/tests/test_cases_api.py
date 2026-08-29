@@ -165,14 +165,22 @@ def test_analyze_case_endpoint_persists_decision():
     assert data["status"] == "ok"
     assert data["case"]["id"] == case_id
     assert data["case"]["status"] == "EVIDENCE_READY"
+
+    # ====================================================
+    # DECISION
+    # ====================================================
+
     assert data["case"]["issue"] == (
         "Cancelled flight with refund not received"
     )
-    assert data["case"]["recommended_action"] == (
-        "Request the full refund from the airline"
-    )
-    assert data["case"]["priority"] == "high"
 
+    assert data["case"]["recommended_action"] == (
+        "Verify the passenger's refund eligibility, "
+        "contact the airline to request the applicable "
+        "refund, and follow up until a response is received."
+    )
+
+    assert data["case"]["priority"] == "high"
 
 def test_case_activity_endpoint():
     from app.db.database import SessionLocal
