@@ -7,6 +7,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.database import Base
 
 
+# ============================================================
+# CASE STATUS
+# ============================================================
+
 class CaseStatus(str, Enum):
     CREATED = "CREATED"
     ANALYZING = "ANALYZING"
@@ -23,6 +27,10 @@ class CaseStatus(str, Enum):
     CLOSED = "CLOSED"
 
 
+# ============================================================
+# CASE
+# ============================================================
+
 class Case(Base):
     __tablename__ = "cases"
 
@@ -34,11 +42,17 @@ class Case(Base):
 
     title: Mapped[str] = mapped_column(
         String(255),
+        nullable=False,
     )
 
     description: Mapped[str] = mapped_column(
         Text,
+        nullable=False,
     )
+
+    # --------------------------------------------------------
+    # IDENTITY / CASE FACTS
+    # --------------------------------------------------------
 
     passenger: Mapped[str | None] = mapped_column(
         String(255),
@@ -60,13 +74,32 @@ class Case(Base):
         nullable=True,
     )
 
+    flight_number: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
     cancellation_date: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,
     )
 
+    # --------------------------------------------------------
+    # MONEY
+    # --------------------------------------------------------
+
     amount: Mapped[str | None] = mapped_column(
         String(100),
+        nullable=True,
+    )
+
+    amount_value: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    amount_currency: Mapped[str | None] = mapped_column(
+        String(10),
         nullable=True,
     )
 
@@ -74,6 +107,10 @@ class Case(Base):
         String(10),
         nullable=True,
     )
+
+    # --------------------------------------------------------
+    # REFUND / REQUEST
+    # --------------------------------------------------------
 
     refund_received: Mapped[bool | None] = mapped_column(
         Boolean,
@@ -89,6 +126,10 @@ class Case(Base):
         Text,
         nullable=True,
     )
+
+    # --------------------------------------------------------
+    # DECISION
+    # --------------------------------------------------------
 
     issue: Mapped[str | None] = mapped_column(
         Text,
@@ -110,6 +151,10 @@ class Case(Base):
         nullable=True,
     )
 
+    # --------------------------------------------------------
+    # PLAN
+    # --------------------------------------------------------
+
     plan_summary: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
@@ -126,11 +171,19 @@ class Case(Base):
         nullable=False,
     )
 
+    # --------------------------------------------------------
+    # STATUS
+    # --------------------------------------------------------
+
     status: Mapped[CaseStatus] = mapped_column(
         SQLEnum(CaseStatus),
         default=CaseStatus.CREATED,
         nullable=False,
     )
+
+    # --------------------------------------------------------
+    # TIMESTAMPS
+    # --------------------------------------------------------
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -145,6 +198,10 @@ class Case(Base):
         nullable=False,
     )
 
+
+# ============================================================
+# CASE ACTIVITY
+# ============================================================
 
 class CaseActivity(Base):
     __tablename__ = "case_activities"
@@ -177,6 +234,10 @@ class CaseActivity(Base):
         nullable=False,
     )
 
+
+# ============================================================
+# CASE RESEARCH
+# ============================================================
 
 class CaseResearch(Base):
     __tablename__ = "case_research"
@@ -212,7 +273,7 @@ class CaseResearch(Base):
         Text,
         nullable=False,
     )
-    
+
     url: Mapped[str | None] = mapped_column(
         String(2048),
         nullable=True,
@@ -224,6 +285,10 @@ class CaseResearch(Base):
         nullable=False,
     )
 
+
+# ============================================================
+# CASE EVIDENCE
+# ============================================================
 
 class CaseEvidence(Base):
     __tablename__ = "case_evidence"

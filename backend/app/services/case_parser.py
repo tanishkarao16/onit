@@ -12,41 +12,14 @@ class Case:
     airline: str | None = None
     cancellation_date: str | None = None
     flight_number: str | None = None
+
     amount: str | None = None
     amount_value: str | None = None
     amount_currency: str | None = None
+
     refund_received: bool | None = None
     requested_resolution: str | None = None
     supporting_facts: list[str] | None = None
-
-
-def _extract_flight_number(text: str) -> str | None:
-    # match IATA code + number like NH123 or NH 123
-    m = re.search(r"\b([A-Z]{2}\s?\d{1,4})\b", text)
-    if m:
-        return m.group(1).replace(" ", "")
-    return None
-
-
-def _normalize_amount(text: str) -> tuple[str | None, str | None]:
-    # simple normalization for JPY-like formats: ¥120,000 or Y120,000 or JPY 120000
-    if not text:
-        return None, None
-    t = text.replace("\u00A5", "Y")
-    # find currency symbol
-    cur = None
-    if "Y" in t or "\u00A5" in text:
-        cur = "JPY"
-    # numbers
-    num = None
-    m = re.search(r"([0-9][0-9,\.]+)", t)
-    if m:
-        raw = m.group(1)
-        cleaned = raw.replace(",", "").replace(".", "")
-        num = cleaned
-    if num:
-        return num, cur
-    return None, None
 
 
 def _elements(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -57,103 +30,311 @@ def _all_text(response: dict[str, Any]) -> str:
     return "\n".join(
         element.get("text", "")
         for element in _elements(response)
-        if element.get("text")
+        if isinstance(element, dict)
+        and element.get("text")
     )
 
 
-def _find_line(text: str, label: str) -> str | None:
-    pattern = rf"^{re.escape(label)}:\s*(.+)$"
+def _find_line(
+    text: str,
+    *labels: str,
+) -> str | None:
 
-    for line in text.splitlines():
-        match = re.match(pattern, line.strip(), re.IGNORECASE)
+    for label in labels:
+
+        pattern = rf"^\s*{re.escape(label)}\s*:\s*(.+?)\s*$"
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE | re.MULTILINE,
+        )
+
         if match:
             return match.group(1).strip()
 
     return None
 
 
-def parse_case(response: dict[str, Any]) -> Case:
-    text = _all_text(response)
+def _extract_flight_number(
+    text: str,
+) -> str | None:
 
-    passenger = None
-    booking_reference = None
-
-    passenger_match = re.search(
-        r"Passenger:\s*(.+?)(?:\n|$)",
+    # Prefer an explicit Flight number field.
+    explicit = _find_line(
         text,
-        re.IGNORECASE,
-    )
-    if passenger_match:
-        passenger = passenger_match.group(1).strip()
-
-    booking_match = re.search(
-        r"Booking reference:\s*(.+?)(?:\n|$)",
-        text,
-        re.IGNORECASE,
-    )
-    if booking_match:
-        booking_reference = booking_match.group(1).strip()
-
-    airline = _find_line(text, "Airline")
-    cancellation_date = _find_line(text, "Flight cancellation date")
-    flight_number = _extract_flight_number(text)
-
-    amount = None
-    amount_value = None
-    amount_currency = None
-    amount_match = re.search(
-        r"(?:Amount paid|paid)\s*:\s*([^\s]+)",
-        text,
-        re.IGNORECASE,
-    )
-    if amount_match:
-        amount = amount_match.group(1).strip()
-        # normalize amount/currency if possible (kept separate from stored amount)
-        norm_amount, norm_currency = _normalize_amount(amount)
-        if norm_amount and norm_currency:
-            amount_value = norm_amount
-            amount_currency = norm_currency
-
-    refund_received = None
-
-    refund_match = re.search(
-        r"Refund received:\s*(Yes|No)",
-        text,
-        re.IGNORECASE,
+        "Flight number",
+        "Flight no",
+        "Flight",
     )
 
-    if refund_match:
-        refund_received = (
-            refund_match.group(1).strip().lower() == "yes"
+    if explicit:
+        match = re.search(
+            r"\b([A-Z]{2,3}\s?\d{1,4})\b",
+            explicit.upper(),
         )
 
-    requested_resolution = None
+        if match:
+            return match.group(1).replace(" ", "")
 
-    resolution_match = re.search(
-        r"Requested resolution:\s*\n?\s*(.+?)(?:\n|$)",
+    # Fallback: search entire document.
+    match = re.search(
+        r"\b([A-Z]{2,3}\s?\d{1,4})\b",
+        text.upper(),
+    )
+
+    if match:
+        return match.group(1).replace(" ", "")
+
+    return None
+
+
+def _normalize_amount(
+    text: str,
+) -> tuple[str | None, str | None]:
+
+    if not text:
+        return None, None
+
+    original = text
+
+    normalized = (
+        text
+        .replace("\u00A5", "Y")
+        .replace("¥", "Y")
+        .strip()
+    )
+
+    currency = None
+
+    if "JPY" in normalized.upper():
+        currency = "JPY"
+
+    elif "Y" in normalized.upper():
+        currency = "JPY"
+
+    elif "¥" in original:
+        currency = "JPY"
+
+    # Find numeric amount.
+    match = re.search(
+        r"\d[\d,]*(?:\.\d+)?",
+        normalized,
+    )
+
+    if not match:
+        return None, currency
+
+    raw = match.group(0)
+
+    # Preserve decimal meaning where relevant.
+    if "." in raw:
+        cleaned = raw.replace(",", "")
+    else:
+        cleaned = raw.replace(",", "")
+
+    return cleaned, currency
+
+
+def _extract_amount(
+    text: str,
+) -> tuple[str | None, str | None, str | None]:
+
+    # Examples:
+    # Amount paid: ¥50,000
+    # Amount: Y120,000
+    # Paid: JPY 50000
+    # Refund amount: ¥50,000
+
+    match = re.search(
+        r"(?:Amount paid|Amount|Paid|Refund amount)"
+        r"\s*:\s*(.+?)(?:\n|$)",
         text,
         re.IGNORECASE,
     )
 
-    if resolution_match:
-        requested_resolution = resolution_match.group(1).strip()
+    if not match:
+        return None, None, None
 
-    supporting_facts = []
+    raw_amount = match.group(1).strip()
 
-    for element in _elements(response):
-        element_text = element.get("text", "")
+    value, currency = _normalize_amount(
+        raw_amount
+    )
 
-        if element.get("role") == "ListItem" and element_text:
-            supporting_facts.append(
-                element_text.lstrip("- ").strip()
-            )
+    return (
+        raw_amount,
+        value,
+        currency,
+    )
+
+
+def _extract_refund_received(
+    text: str,
+) -> bool | None:
+
+    match = re.search(
+        r"Refund received\s*:\s*(Yes|No)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    return (
+        match.group(1).strip().lower()
+        == "yes"
+    )
+
+
+def _extract_supporting_facts(
+    text: str,
+) -> list[str]:
+
+    facts: list[str] = []
+
+    # Explicit Supporting facts field.
+    match = re.search(
+        r"Supporting facts\s*:\s*(.+?)(?:\n|$)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+        value = match.group(1).strip()
+
+        if value:
+            facts.append(value)
+
+    # Also support actual list items.
+    for line in text.splitlines():
+
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        if stripped.startswith("- "):
+            fact = stripped[2:].strip()
+
+            if fact:
+                facts.append(fact)
+
+    # Remove duplicates while preserving order.
+    unique_facts = []
+
+    for fact in facts:
+
+        if fact not in unique_facts:
+            unique_facts.append(fact)
+
+    return unique_facts
+
+
+def parse_case(
+    response: dict[str, Any],
+) -> Case:
+
+    text = _all_text(response)
+
+    # --------------------------------------------------------
+    # PASSENGER
+    # --------------------------------------------------------
+
+    passenger = _find_line(
+        text,
+        "Passenger",
+        "Passenger name",
+        "Name",
+    )
+
+    # --------------------------------------------------------
+    # BOOKING REFERENCE
+    # --------------------------------------------------------
+
+    booking_reference = _find_line(
+        text,
+        "Booking reference",
+        "Booking Reference",
+        "Booking ref",
+        "Reference",
+    )
+
+    # --------------------------------------------------------
+    # AIRLINE
+    # --------------------------------------------------------
+
+    airline = _find_line(
+        text,
+        "Airline",
+        "Airline name",
+    )
+
+    # --------------------------------------------------------
+    # FLIGHT NUMBER
+    # --------------------------------------------------------
+
+    flight_number = _extract_flight_number(
+        text
+    )
+
+    # --------------------------------------------------------
+    # CANCELLATION DATE
+    # --------------------------------------------------------
+
+    cancellation_date = _find_line(
+        text,
+        "Cancellation date",
+        "Flight cancellation date",
+        "Cancelled date",
+        "Cancellation Date",
+    )
+
+    # --------------------------------------------------------
+    # AMOUNT
+    # --------------------------------------------------------
+
+    (
+        amount,
+        amount_value,
+        amount_currency,
+    ) = _extract_amount(text)
+
+    # --------------------------------------------------------
+    # REFUND
+    # --------------------------------------------------------
+
+    refund_received = _extract_refund_received(
+        text
+    )
+
+    # --------------------------------------------------------
+    # REQUESTED RESOLUTION
+    # --------------------------------------------------------
+
+    requested_resolution = _find_line(
+        text,
+        "Requested resolution",
+        "Requested Resolution",
+        "Resolution requested",
+        "Desired resolution",
+    )
+
+    # --------------------------------------------------------
+    # SUPPORTING FACTS
+    # --------------------------------------------------------
+
+    supporting_facts = _extract_supporting_facts(
+        text
+    )
 
     return Case(
         passenger=passenger,
         booking_reference=booking_reference,
         airline=airline,
-        flight_number=flight_number,
         cancellation_date=cancellation_date,
+        flight_number=flight_number,
         amount=amount,
         amount_value=amount_value,
         amount_currency=amount_currency,

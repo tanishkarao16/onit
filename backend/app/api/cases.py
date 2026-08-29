@@ -1,46 +1,115 @@
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+import json
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+    Request,
+)
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.database import Base, engine, get_db
-from app.integrations.nutrient import NutrientError, parse_document
-from app.models.case import Case, CaseActivity, CaseResearch, CaseStatus
-from app.services.case_analysis import analyze_case
-from app.services.case_approval import request_case_approval
-from app.services.case_approval import approve_case
-from app.services.case_decision import CaseDecision
-from app.services.case_parser import parse_case
-from app.services.case_persistence import persist_parsed_case
-from app.services.case_planning import plan_case
-from app.services.case_research import research_case
-from app.services.evidence_to_decision import synthesize_evidence_and_plan
-from app.services.case_research import research_case
-from app.models.case import CaseResearch
-from app.services.case_activity import record_activity
-from app.models.case import CaseEvidence
-import json
 
+from app.integrations.nutrient import (
+    NutrientError,
+    parse_document,
+)
+
+from app.models.case import (
+    Case,
+    CaseActivity,
+    CaseEvidence,
+    CaseResearch,
+    CaseStatus,
+)
+
+from app.services.case_analysis import analyze_case
+
+from app.services.case_approval import (
+    approve_case,
+    request_case_approval,
+)
+
+from app.services.case_decision import CaseDecision
+
+from app.services.case_parser import parse_case
+
+from app.services.case_persistence import (
+    persist_parsed_case,
+)
+
+from app.services.case_planning import plan_case
+
+from app.services.case_research import (
+    research_case,
+)
+
+from app.services.evidence_to_decision import (
+    synthesize_evidence_and_plan,
+)
+
+from app.services.case_activity import (
+    record_activity,
+)
+
+
+# ============================================================
+# DATABASE INITIALIZATION
+# ============================================================
 
 Base.metadata.create_all(bind=engine)
 
-# Ensure `url` column exists on `case_research` table when model adds it.
+
+# ============================================================
+# BACKWARD COMPATIBILITY
+#
+# Ensure case_research.url exists for older SQLite databases.
+# ============================================================
+
 with engine.connect() as conn:
+
     try:
-        res = conn.execute(
+
+        result = conn.exec_driver_sql(
             "PRAGMA table_info(case_research)"
         ).fetchall()
-        cols = {row[1] for row in res}
-        if "url" not in cols:
-            conn.execute("ALTER TABLE case_research ADD COLUMN url VARCHAR(2048)")
+
+        columns = {
+            row[1]
+            for row in result
+        }
+
+        if "url" not in columns:
+
+            conn.exec_driver_sql(
+                "ALTER TABLE case_research "
+                "ADD COLUMN url VARCHAR(2048)"
+            )
+
+        conn.commit()
+
     except Exception:
-        # Non-fatal: leave existing schema as-is if pragma/alter fail
         pass
 
-router = APIRouter(prefix="/cases", tags=["cases"])
 
+# ============================================================
+# ROUTER
+# ============================================================
+
+router = APIRouter(
+    prefix="/cases",
+    tags=["cases"],
+)
+
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
 
 class CreateCaseRequest(BaseModel):
     title: str
@@ -50,11 +119,16 @@ class CreateCaseRequest(BaseModel):
     currency: str | None = None
 
 
+# ============================================================
+# CREATE CASE
+# ============================================================
+
 @router.post("")
 def create_case(
     request: CreateCaseRequest,
     db: Session = Depends(get_db),
 ):
+
     case = Case(
         title=request.title,
         description=request.description,
@@ -67,6 +141,13 @@ def create_case(
     db.add(case)
     db.commit()
     db.refresh(case)
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type="CASE_CREATED",
+        message="ONIT created a new case.",
+    )
 
     return {
         "status": "ok",
@@ -82,13 +163,20 @@ def create_case(
     }
 
 
+# ============================================================
+# LIST CASES
+# ============================================================
+
 @router.get("")
 def list_cases(
     db: Session = Depends(get_db),
 ):
+
     cases = (
         db.query(Case)
-        .order_by(Case.created_at.desc())
+        .order_by(
+            Case.created_at.desc()
+        )
         .all()
     )
 
@@ -109,14 +197,1358 @@ def list_cases(
     }
 
 
+# ============================================================
+# UNIVERSAL PARSE
+#
+# PDF / IMAGE -> EXTRACTED CASE DATA
+# ============================================================
+
+@router.post("/parse")
+async def parse_case_document(
+    file: UploadFile = File(...),
+):
+
+    if not file.filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="A file is required.",
+        )
+
+    suffix = (
+        Path(file.filename).suffix
+        or ".bin"
+    )
+
+    allowed = {
+        ".pdf",
+        ".png",
+        ".jpg",
+        ".jpeg",
+    }
+
+    if suffix.lower() not in allowed:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported file type. "
+                "Use PDF, PNG, JPG, or JPEG."
+            ),
+        )
+
+    with NamedTemporaryFile(
+        delete=False,
+        suffix=suffix,
+    ) as temp_file:
+
+        temp_file.write(
+            await file.read()
+        )
+
+        temp_path = Path(
+            temp_file.name
+        )
+
+    try:
+
+        nutrient_response = await parse_document(
+            temp_path,
+            mode="understand",
+            output_format="spatial",
+        )
+
+    except FileNotFoundError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except NutrientError as exc:
+
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
+
+    finally:
+
+        temp_path.unlink(
+            missing_ok=True
+        )
+
+    case = parse_case(
+        nutrient_response
+    )
+
+    return {
+        "status": "ok",
+        "case": {
+            "passenger": case.passenger,
+            "booking_reference": (
+                case.booking_reference
+            ),
+            "airline": case.airline,
+            "flight_number": getattr(
+                case,
+                "flight_number",
+                None,
+            ),
+            "cancellation_date": (
+                case.cancellation_date
+            ),
+            "amount": case.amount,
+            "amount_value": getattr(
+                case,
+                "amount_value",
+                None,
+            ),
+            "amount_currency": getattr(
+                case,
+                "amount_currency",
+                None,
+            ),
+            "refund_received": (
+                case.refund_received
+            ),
+            "requested_resolution": (
+                case.requested_resolution
+            ),
+            "supporting_facts": (
+                case.supporting_facts
+            ),
+        },
+    }
+
+
+# ============================================================
+# UNIVERSAL PARSE + CREATE
+#
+# PDF / IMAGE / PASTED TEXT
+# ->
+# Nutrient
+# ->
+# Parsed Case
+# ->
+# Persistent ONIT Case
+# ->
+# Evidence
+# ->
+# Provenance
+# ============================================================
+
+@router.post("/parse-and-create")
+async def parse_and_create_case(
+    request: Request,
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+
+    try:
+
+        # ======================================================
+        # 1. INPUT
+        # ======================================================
+
+        if file is None:
+
+            text_input = None
+
+            # ------------------------------
+            # JSON
+            # ------------------------------
+
+            try:
+
+                body = await request.json()
+
+                if isinstance(body, dict):
+
+                    text_input = body.get(
+                        "text"
+                    )
+
+            except Exception:
+                pass
+
+            # ------------------------------
+            # FORM
+            # ------------------------------
+
+            if not text_input:
+
+                try:
+
+                    form = await request.form()
+
+                    text_input = form.get(
+                        "text"
+                    )
+
+                except Exception:
+                    pass
+
+            if not text_input:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "A file or text is required."
+                    ),
+                )
+
+            nutrient_response = {
+                "output": {
+                    "elements": [
+                        {
+                            "role": "Text",
+                            "text": str(
+                                text_input
+                            ),
+                        }
+                    ]
+                }
+            }
+
+            filename = "pasted_text.txt"
+            mimetype = "text/plain"
+
+        else:
+
+            # ==================================================
+            # 2. FILE VALIDATION
+            # ==================================================
+
+            if not file.filename:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail="A file is required.",
+                )
+
+            suffix = (
+                Path(file.filename).suffix
+                or ".bin"
+            )
+
+            allowed = {
+                ".pdf",
+                ".png",
+                ".jpg",
+                ".jpeg",
+            }
+
+            if suffix.lower() not in allowed:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Unsupported file type. "
+                        "Use PDF, PNG, JPG, or JPEG."
+                    ),
+                )
+
+            # ==================================================
+            # 3. TEMP FILE
+            # ==================================================
+
+            with NamedTemporaryFile(
+                delete=False,
+                suffix=suffix,
+            ) as temp_file:
+
+                temp_file.write(
+                    await file.read()
+                )
+
+                temp_path = Path(
+                    temp_file.name
+                )
+
+            filename = file.filename
+            mimetype = file.content_type
+
+            # ==================================================
+            # 4. NUTRIENT
+            # ==================================================
+
+            try:
+
+                nutrient_response = (
+                    await parse_document(
+                        temp_path,
+                        mode="understand",
+                        output_format="spatial",
+                    )
+                )
+
+            except FileNotFoundError as exc:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(exc),
+                ) from exc
+
+            except NutrientError as exc:
+
+                raise HTTPException(
+                    status_code=502,
+                    detail=str(exc),
+                ) from exc
+
+            finally:
+
+                temp_path.unlink(
+                    missing_ok=True
+                )
+
+        # ======================================================
+        # 5. EXTRACT TEXT
+        # ======================================================
+
+        elements = (
+            nutrient_response
+            .get("output", {})
+            .get("elements", [])
+        )
+
+        original_text = "\n".join(
+            element.get("text", "")
+            for element in elements
+            if isinstance(
+                element,
+                dict,
+            )
+        )
+
+        # ======================================================
+        # 6. PARSE CASE
+        # ======================================================
+
+        parsed_case = parse_case(
+            nutrient_response
+        )
+
+        # ======================================================
+        # 7. PERSIST CASE
+        # ======================================================
+
+        case = persist_parsed_case(
+            db,
+            parsed_case,
+        )
+
+        # ======================================================
+        # 8. PROVENANCE
+        # ======================================================
+
+        def find_provenance_for(value):
+
+            if not value:
+                return None
+
+            value_string = str(value)
+
+            for index, element in enumerate(
+                elements
+            ):
+
+                if not isinstance(
+                    element,
+                    dict,
+                ):
+                    continue
+
+                text = element.get(
+                    "text",
+                    "",
+                )
+
+                if value_string in text:
+
+                    provenance = {
+                        "source": filename,
+                        "element_index": index,
+                    }
+
+                    if "confidence" in element:
+
+                        provenance[
+                            "confidence"
+                        ] = element.get(
+                            "confidence"
+                        )
+
+                    if "page" in element:
+
+                        provenance[
+                            "page"
+                        ] = element.get(
+                            "page"
+                        )
+
+                    return provenance
+
+            return {
+                "source": filename,
+            }
+
+        # ======================================================
+        # 9. FACTS
+        # ======================================================
+
+        facts = {
+
+            "passenger": {
+                "value": parsed_case.passenger,
+                "provenance": find_provenance_for(
+                    parsed_case.passenger
+                ),
+            },
+
+            "booking_reference": {
+                "value": (
+                    parsed_case.booking_reference
+                ),
+                "provenance": find_provenance_for(
+                    parsed_case.booking_reference
+                ),
+            },
+
+            "airline": {
+                "value": parsed_case.airline,
+                "provenance": find_provenance_for(
+                    parsed_case.airline
+                ),
+            },
+
+            "flight_number": {
+                "value": getattr(
+                    parsed_case,
+                    "flight_number",
+                    None,
+                ),
+                "provenance": find_provenance_for(
+                    getattr(
+                        parsed_case,
+                        "flight_number",
+                        None,
+                    )
+                ),
+            },
+
+            "cancellation_date": {
+                "value": (
+                    parsed_case.cancellation_date
+                ),
+                "provenance": find_provenance_for(
+                    parsed_case.cancellation_date
+                ),
+            },
+
+            "amount": {
+                "value": parsed_case.amount,
+                "amount_value": getattr(
+                    parsed_case,
+                    "amount_value",
+                    None,
+                ),
+                "currency": getattr(
+                    parsed_case,
+                    "amount_currency",
+                    None,
+                ),
+                "provenance": find_provenance_for(
+                    parsed_case.amount
+                ),
+            },
+
+            "refund_received": {
+                "value": (
+                    parsed_case.refund_received
+                ),
+                "provenance": find_provenance_for(
+                    parsed_case.refund_received
+                ),
+            },
+
+            "requested_resolution": {
+                "value": (
+                    parsed_case.requested_resolution
+                ),
+                "provenance": find_provenance_for(
+                    parsed_case.requested_resolution
+                ),
+            },
+
+            "supporting_facts": {
+                "value": (
+                    parsed_case.supporting_facts
+                ),
+                "provenance": {
+                    "source": filename,
+                },
+            },
+        }
+
+        # ======================================================
+        # 10. EVIDENCE TYPE
+        # ======================================================
+
+        if mimetype == "text/plain":
+
+            evidence_type = "text"
+
+        elif (
+            mimetype
+            and "pdf" in mimetype.lower()
+        ):
+
+            evidence_type = "pdf"
+
+        elif (
+            mimetype
+            and mimetype.lower().startswith(
+                "image/"
+            )
+        ):
+
+            evidence_type = "image"
+
+        else:
+
+            evidence_type = "file"
+
+        # ======================================================
+        # 11. EVIDENCE
+        # ======================================================
+
+        evidence = CaseEvidence(
+            case_id=case.id,
+            filename=filename,
+            evidence_type=evidence_type,
+            mimetype=mimetype,
+            original_text=original_text,
+            extracted_text=original_text,
+            extraction_status="COMPLETED",
+            extracted_facts=json.dumps(
+                facts,
+                ensure_ascii=False,
+            ),
+        )
+
+        db.add(evidence)
+
+        # ======================================================
+        # 12. CONFLICT TRACKING
+        # ======================================================
+
+        conflicts = {}
+
+        def try_set(
+            field_name,
+            value,
+        ):
+
+            if value is None:
+                return
+
+            if value == "":
+                return
+
+            existing = getattr(
+                case,
+                field_name,
+                None,
+            )
+
+            if existing in (
+                None,
+                "",
+                [],
+            ):
+
+                setattr(
+                    case,
+                    field_name,
+                    value,
+                )
+
+            elif str(existing) != str(value):
+
+                conflicts[field_name] = {
+                    "existing": existing,
+                    "extracted": value,
+                }
+
+        # ======================================================
+        # 13. IMPORTANT:
+        # ACTUALLY APPLY EXTRACTED FACTS TO CASE
+        # ======================================================
+
+        try_set(
+            "passenger",
+            parsed_case.passenger,
+        )
+
+        try_set(
+            "booking_reference",
+            parsed_case.booking_reference,
+        )
+
+        try_set(
+            "airline",
+            parsed_case.airline,
+        )
+
+        try_set(
+            "cancellation_date",
+            parsed_case.cancellation_date,
+        )
+
+        try_set(
+            "amount",
+            getattr(
+                parsed_case,
+                "amount_value",
+                None,
+            )
+            or parsed_case.amount,
+        )
+
+        try_set(
+            "currency",
+            getattr(
+                parsed_case,
+                "amount_currency",
+                None,
+            ),
+        )
+
+        try_set(
+            "refund_received",
+            parsed_case.refund_received,
+        )
+
+        try_set(
+            "requested_resolution",
+            parsed_case.requested_resolution,
+        )
+
+        # ======================================================
+        # 14. SUPPORTING FACTS
+        # ======================================================
+
+        if parsed_case.supporting_facts:
+
+            existing_facts = []
+
+            if case.supporting_facts:
+
+                try:
+
+                    existing_facts = json.loads(
+                        case.supporting_facts
+                    )
+
+                except (
+                    json.JSONDecodeError,
+                    TypeError,
+                ):
+
+                    existing_facts = []
+
+            if not isinstance(
+                existing_facts,
+                list,
+            ):
+
+                existing_facts = []
+
+            merged_facts = list(
+                existing_facts
+            )
+
+            for fact in (
+                parsed_case.supporting_facts
+            ):
+
+                if fact not in merged_facts:
+
+                    merged_facts.append(
+                        fact
+                    )
+
+            case.supporting_facts = json.dumps(
+                merged_facts,
+                ensure_ascii=False,
+            )
+
+        # ======================================================
+        # 15. COMMIT
+        # ======================================================
+
+        db.commit()
+
+        db.refresh(case)
+        db.refresh(evidence)
+
+        # ======================================================
+        # 16. ACTIVITY
+        # ======================================================
+
+        record_activity(
+            db=db,
+            case_id=case.id,
+            event_type="EVIDENCE_RECEIVED",
+            message=(
+                f"ONIT received evidence "
+                f"{filename} and created a case."
+            ),
+        )
+
+        record_activity(
+            db=db,
+            case_id=case.id,
+            event_type="DOCUMENT_ANALYZED",
+            message=(
+                f"ONIT analyzed {filename}."
+            ),
+        )
+
+        record_activity(
+            db=db,
+            case_id=case.id,
+            event_type="FACTS_EXTRACTED",
+            message=(
+                "ONIT extracted structured facts "
+                "from submitted evidence."
+            ),
+        )
+
+        # ======================================================
+        # 17. RESPONSE
+        # ======================================================
+
+        response = {
+            "status": "ok",
+
+            "case": {
+                "id": case.id,
+                "passenger": case.passenger,
+                "booking_reference": (
+                    case.booking_reference
+                ),
+                "airline": case.airline,
+                "flight_number": getattr(
+                    case,
+                    "flight_number",
+                    None,
+                ),
+                "cancellation_date": (
+                    case.cancellation_date
+                ),
+                "amount": case.amount,
+                "currency": case.currency,
+                "refund_received": (
+                    case.refund_received
+                ),
+                "requested_resolution": (
+                    case.requested_resolution
+                ),
+                "supporting_facts": (
+                    case.supporting_facts
+                ),
+                "status": case.status,
+            },
+
+            "evidence": {
+                "id": evidence.id,
+                "filename": evidence.filename,
+                "evidence_type": (
+                    evidence.evidence_type
+                ),
+                "mimetype": evidence.mimetype,
+                "extraction_status": (
+                    evidence.extraction_status
+                ),
+                "extracted_facts": json.loads(
+                    evidence.extracted_facts
+                    or "{}"
+                ),
+                "created_at": evidence.created_at,
+            },
+        }
+
+        if conflicts:
+
+            response["conflicts"] = conflicts
+
+        return response
+
+    except HTTPException:
+        raise
+
+    except FileNotFoundError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except NutrientError as exc:
+
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
+
+
+# ============================================================
+# ADD EVIDENCE TO EXISTING CASE
+# ============================================================
+
+@router.post("/{case_id}/evidence")
+async def add_case_evidence(
+    case_id: int,
+    request: Request,
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+
+    case = db.get(
+        Case,
+        case_id,
+    )
+
+    if case is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    text_input = None
+    filename = None
+    mimetype = None
+    evidence_type = "text"
+
+    # ========================================================
+    # FILE
+    # ========================================================
+
+    if file is not None:
+
+        filename = file.filename
+        mimetype = file.content_type
+
+        suffix = (
+            Path(filename or "").suffix
+            or ".bin"
+        )
+
+        allowed = {
+            ".pdf",
+            ".png",
+            ".jpg",
+            ".jpeg",
+        }
+
+        if suffix.lower() not in allowed:
+
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type.",
+            )
+
+        with NamedTemporaryFile(
+            delete=False,
+            suffix=suffix,
+        ) as tmp:
+
+            tmp.write(
+                await file.read()
+            )
+
+            tmp.flush()
+
+            temp_path = Path(
+                tmp.name
+            )
+
+        record_activity(
+            db=db,
+            case_id=case.id,
+            event_type=(
+                "EVIDENCE_EXTRACTION_STARTED"
+            ),
+            message=(
+                f"ONIT started extracting "
+                f"{filename}."
+            ),
+        )
+
+        try:
+
+            parsed = await parse_document(
+                temp_path,
+                mode="understand",
+                output_format="spatial",
+            )
+
+        except NutrientError as exc:
+
+            record_activity(
+                db=db,
+                case_id=case.id,
+                event_type=(
+                    "EVIDENCE_EXTRACTION_FAILED"
+                ),
+                message=(
+                    f"Extraction failed for "
+                    f"{filename}: {str(exc)}"
+                ),
+            )
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+        finally:
+
+            temp_path.unlink(
+                missing_ok=True
+            )
+
+        extracted_text = "\n".join(
+            element.get("text", "")
+            for element in (
+                parsed
+                .get("output", {})
+                .get("elements", [])
+            )
+            if isinstance(
+                element,
+                dict,
+            )
+        )
+
+        original_text = extracted_text
+
+        if (
+            mimetype
+            and "pdf" in mimetype.lower()
+        ):
+
+            evidence_type = "pdf"
+
+        elif (
+            mimetype
+            and mimetype.lower().startswith(
+                "image/"
+            )
+        ):
+
+            evidence_type = "image"
+
+        else:
+
+            evidence_type = "file"
+
+    # ========================================================
+    # TEXT
+    # ========================================================
+
+    else:
+
+        try:
+
+            body = await request.json()
+
+            if isinstance(
+                body,
+                dict,
+            ):
+
+                text_input = body.get(
+                    "text"
+                )
+
+        except Exception:
+
+            try:
+
+                form = await request.form()
+
+                text_input = form.get(
+                    "text"
+                )
+
+            except Exception:
+
+                text_input = None
+
+        if not text_input:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No file or text provided."
+                ),
+            )
+
+        extracted_text = str(
+            text_input
+        )
+
+        original_text = extracted_text
+
+        filename = "pasted_text.txt"
+        mimetype = "text/plain"
+        evidence_type = "text"
+
+    # ========================================================
+    # PARSE
+    # ========================================================
+
+    response = {
+        "output": {
+            "elements": [
+                {
+                    "role": "Text",
+                    "text": extracted_text,
+                }
+            ]
+        }
+    }
+
+    parsed_case = parse_case(
+        response
+    )
+
+    # ========================================================
+    # FACTS
+    # ========================================================
+
+    facts = {
+
+        "passenger": parsed_case.passenger,
+
+        "airline": parsed_case.airline,
+
+        "booking_reference": (
+            parsed_case.booking_reference
+        ),
+
+        "flight_number": getattr(
+            parsed_case,
+            "flight_number",
+            None,
+        ),
+
+        "cancellation_date": (
+            parsed_case.cancellation_date
+        ),
+
+        "amount": parsed_case.amount,
+
+        "amount_value": getattr(
+            parsed_case,
+            "amount_value",
+            None,
+        ),
+
+        "amount_currency": getattr(
+            parsed_case,
+            "amount_currency",
+            None,
+        ),
+
+        "refund_received": (
+            parsed_case.refund_received
+        ),
+
+        "requested_resolution": (
+            parsed_case.requested_resolution
+        ),
+
+        "supporting_facts": (
+            parsed_case.supporting_facts
+        ),
+    }
+
+    # ========================================================
+    # SAVE EVIDENCE
+    # ========================================================
+
+    evidence = CaseEvidence(
+        case_id=case.id,
+        filename=filename,
+        evidence_type=evidence_type,
+        mimetype=mimetype,
+        original_text=original_text,
+        extracted_text=extracted_text,
+        extraction_status="COMPLETED",
+        extracted_facts=json.dumps(
+            facts,
+            ensure_ascii=False,
+        ),
+    )
+
+    db.add(evidence)
+
+    # ========================================================
+    # CONFLICTS
+    # ========================================================
+
+    conflicts = {}
+
+    def try_set(
+        field_name,
+        value,
+    ):
+
+        if value is None:
+            return
+
+        if value == "":
+            return
+
+        existing = getattr(
+            case,
+            field_name,
+            None,
+        )
+
+        if existing in (
+            None,
+            "",
+            [],
+        ):
+
+            setattr(
+                case,
+                field_name,
+                value,
+            )
+
+        elif str(existing) != str(value):
+
+            conflicts[field_name] = {
+                "existing": existing,
+                "extracted": value,
+            }
+
+    # ========================================================
+    # UPDATE CASE
+    # ========================================================
+
+    try_set(
+        "passenger",
+        parsed_case.passenger,
+    )
+
+    try_set(
+        "airline",
+        parsed_case.airline,
+    )
+
+    try_set(
+        "booking_reference",
+        parsed_case.booking_reference,
+    )
+
+    try_set(
+        "cancellation_date",
+        parsed_case.cancellation_date,
+    )
+
+    try_set(
+        "amount",
+        getattr(
+            parsed_case,
+            "amount_value",
+            None,
+        )
+        or parsed_case.amount,
+    )
+
+    try_set(
+        "currency",
+        getattr(
+            parsed_case,
+            "amount_currency",
+            None,
+        ),
+    )
+
+    try_set(
+        "refund_received",
+        parsed_case.refund_received,
+    )
+
+    try_set(
+        "requested_resolution",
+        parsed_case.requested_resolution,
+    )
+
+    # ========================================================
+    # SUPPORTING FACTS
+    # ========================================================
+
+    if parsed_case.supporting_facts:
+
+        existing_facts = []
+
+        if case.supporting_facts:
+
+            try:
+
+                existing_facts = json.loads(
+                    case.supporting_facts
+                )
+
+            except (
+                json.JSONDecodeError,
+                TypeError,
+            ):
+
+                existing_facts = []
+
+        if not isinstance(
+            existing_facts,
+            list,
+        ):
+
+            existing_facts = []
+
+        merged_facts = list(
+            existing_facts
+        )
+
+        for fact in (
+            parsed_case.supporting_facts
+        ):
+
+            if fact not in merged_facts:
+
+                merged_facts.append(
+                    fact
+                )
+
+        case.supporting_facts = json.dumps(
+            merged_facts,
+            ensure_ascii=False,
+        )
+
+    # ========================================================
+    # COMMIT
+    # ========================================================
+
+    db.commit()
+
+    db.refresh(evidence)
+    db.refresh(case)
+
+    # ========================================================
+    # ACTIVITY
+    # ========================================================
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type="EVIDENCE_ADDED",
+        message=(
+            f"ONIT added evidence "
+            f"{filename or 'text input'}."
+        ),
+    )
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type=(
+            "EVIDENCE_EXTRACTION_COMPLETED"
+        ),
+        message=(
+            f"ONIT extracted facts from "
+            f"{filename or 'text input'}."
+        ),
+    )
+
+    # ========================================================
+    # RESPONSE
+    # ========================================================
+
+    result = {
+        "id": evidence.id,
+        "case_id": evidence.case_id,
+        "filename": evidence.filename,
+        "evidence_type": evidence.evidence_type,
+        "mimetype": evidence.mimetype,
+        "extraction_status": (
+            evidence.extraction_status
+        ),
+        "extracted_facts": json.loads(
+            evidence.extracted_facts
+            or "{}"
+        ),
+        "created_at": evidence.created_at,
+    }
+
+    if conflicts:
+
+        result["conflicts"] = conflicts
+
+    return {
+        "status": "ok",
+
+        "case": {
+            "id": case.id,
+            "passenger": case.passenger,
+            "booking_reference": (
+                case.booking_reference
+            ),
+            "airline": case.airline,
+            "cancellation_date": (
+                case.cancellation_date
+            ),
+            "amount": case.amount,
+            "currency": case.currency,
+            "refund_received": (
+                case.refund_received
+            ),
+            "requested_resolution": (
+                case.requested_resolution
+            ),
+            "supporting_facts": (
+                case.supporting_facts
+            ),
+        },
+
+        "evidence": result,
+    }
+
+
+# ============================================================
+# GET CASE ACTIVITY
+# ============================================================
+
 @router.get("/{case_id}/activity")
 def get_case_activity(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
@@ -124,7 +1556,9 @@ def get_case_activity(
 
     activities = (
         db.query(CaseActivity)
-        .filter(CaseActivity.case_id == case_id)
+        .filter(
+            CaseActivity.case_id == case_id
+        )
         .order_by(
             CaseActivity.created_at.asc(),
             CaseActivity.id.asc(),
@@ -146,14 +1580,23 @@ def get_case_activity(
     }
 
 
+# ============================================================
+# GET CASE RESEARCH
+# ============================================================
+
 @router.get("/{case_id}/research")
 def get_case_research(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
@@ -161,7 +1604,9 @@ def get_case_research(
 
     research = (
         db.query(CaseResearch)
-        .filter(CaseResearch.case_id == case_id)
+        .filter(
+            CaseResearch.case_id == case_id
+        )
         .order_by(
             CaseResearch.created_at.asc(),
             CaseResearch.id.asc(),
@@ -171,6 +1616,7 @@ def get_case_research(
 
     return {
         "status": "ok",
+
         "research": [
             {
                 "id": item.id,
@@ -178,6 +1624,11 @@ def get_case_research(
                 "title": item.title,
                 "summary": item.summary,
                 "relevance": item.relevance,
+                "url": getattr(
+                    item,
+                    "url",
+                    None,
+                ),
                 "created_at": item.created_at,
             }
             for item in research
@@ -185,198 +1636,96 @@ def get_case_research(
     }
 
 
-
-
-@router.post("/{case_id}/evidence")
-async def add_case_evidence(
-    case_id: int,
-    request: Request,
-    file: UploadFile | None = File(None),
-    db: Session = Depends(get_db),
-):
-    case = db.get(Case, case_id)
-
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found.")
-
-    # Accept either file upload (PDF/image) or JSON/text body
-    text_input = None
-    filename = None
-    mimetype = None
-    evidence_type = "text"
-
-    if file is not None:
-        filename = file.filename
-        mimetype = file.content_type
-        # save uploaded file to temp file
-        tmp = NamedTemporaryFile(delete=False)
-        contents = await file.read()
-        tmp.write(contents)
-        tmp.flush()
-        tmp.close()
-        # use nutrient to extract text
-        record_activity(db=db, case_id=case.id, event_type="EVIDENCE_EXTRACTION_STARTED", message=f"ONIT started extracting {filename}.")
-        try:
-            parsed = await parse_document(tmp.name)
-        except NutrientError as exc:
-            record_activity(db=db, case_id=case.id, event_type="EVIDENCE_EXTRACTION_FAILED", message=f"Extraction failed for {filename}: {str(exc)}")
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        extracted_text = "\n".join(e.get("text", "") for e in parsed.get("output", {}).get("elements", []))
-        original_text = extracted_text
-        evidence_type = "pdf" if (mimetype and "pdf" in mimetype) else ("image" if (mimetype and mimetype.startswith("image/")) else "file")
-
-    else:
-        # try JSON body
-        try:
-            body = await request.json()
-            text_input = body.get("text")
-        except Exception:
-            # maybe form field
-            form = await request.form()
-            text_input = form.get("text")
-
-        if not text_input:
-            raise HTTPException(status_code=400, detail="No file or text provided.")
-
-        extracted_text = text_input
-        original_text = text_input
-        filename = None
-        mimetype = "text/plain"
-        evidence_type = "text"
-
-    # parse extracted_text using existing parser format
-    # map into nutrient-like response for parse_case
-    response = {"output": {"elements": [{"role": "Text", "text": extracted_text}]}}
-
-    from app.services.case_parser import parse_case
-
-    parsed_case = parse_case(response)
-
-    # build extracted facts dict
-    facts = {
-        "passenger": parsed_case.passenger,
-        "airline": parsed_case.airline,
-        "booking_reference": parsed_case.booking_reference,
-        "flight_number": getattr(parsed_case, "flight_number", None),
-        "cancellation_date": parsed_case.cancellation_date,
-        "amount": parsed_case.amount,
-        "requested_resolution": parsed_case.requested_resolution,
-        "supporting_facts": parsed_case.supporting_facts,
-    }
-
-    # persist evidence
-    ev = CaseEvidence(
-        case_id=case.id,
-        filename=filename,
-        evidence_type=evidence_type,
-        mimetype=mimetype,
-        original_text=original_text,
-        extracted_text=extracted_text,
-        extraction_status="COMPLETED",
-        extracted_facts=json.dumps(facts),
-    )
-
-    db.add(ev)
-
-    # update case fields if empty and extracted facts present
-    conflicts = {}
-    def try_set(field_name, value):
-        nonlocal conflicts
-        if not value:
-            return
-        existing = getattr(case, field_name, None)
-        if existing in (None, "", []):
-            setattr(case, field_name, value)
-        else:
-            if str(existing) != str(value):
-                conflicts[field_name] = {"existing": existing, "extracted": value}
-
-    try_set("passenger", parsed_case.passenger)
-    try_set("airline", parsed_case.airline)
-    try_set("booking_reference", parsed_case.booking_reference)
-    try_set("cancellation_date", parsed_case.cancellation_date)
-    # amount normalization: parsed_case.amount may contain normalized annotation
-    try_set("amount", parsed_case.amount)
-
-    db.commit()
-    db.refresh(ev)
-    db.refresh(case)
-
-    record_activity(db=db, case_id=case.id, event_type="EVIDENCE_ADDED", message=f"ONIT added evidence {filename or 'text input' }.")
-    record_activity(db=db, case_id=case.id, event_type="EVIDENCE_EXTRACTION_COMPLETED", message=f"ONIT extracted facts from {filename or 'text input' }.")
-
-    result = {
-        "id": ev.id,
-        "case_id": ev.case_id,
-        "filename": ev.filename,
-        "evidence_type": ev.evidence_type,
-        "mimetype": ev.mimetype,
-        "extraction_status": ev.extraction_status,
-        "extracted_facts": json.loads(ev.extracted_facts or "{}"),
-        "created_at": ev.created_at,
-    }
-
-    if conflicts:
-        result["conflicts"] = conflicts
-
-    return {"status": "ok", "evidence": result}
-
-
+# ============================================================
+# GET CASE EVIDENCE
+# ============================================================
 
 @router.get("/{case_id}/evidence")
 def get_case_evidence(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
-        raise HTTPException(status_code=404, detail="Case not found.")
+
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
 
     items = (
         db.query(CaseEvidence)
-        .filter(CaseEvidence.case_id == case_id)
-        .order_by(CaseEvidence.created_at.asc(), CaseEvidence.id.asc())
+        .filter(
+            CaseEvidence.case_id == case_id
+        )
+        .order_by(
+            CaseEvidence.created_at.asc(),
+            CaseEvidence.id.asc(),
+        )
         .all()
     )
 
     return {
         "status": "ok",
+
         "evidence": [
             {
-                "id": it.id,
-                "filename": it.filename,
-                "evidence_type": it.evidence_type,
-                "mimetype": it.mimetype,
-                "extraction_status": it.extraction_status,
-                "extracted_facts": json.loads(it.extracted_facts or "{}"),
-                "created_at": it.created_at,
+                "id": item.id,
+                "filename": item.filename,
+                "evidence_type": (
+                    item.evidence_type
+                ),
+                "mimetype": item.mimetype,
+                "extraction_status": (
+                    item.extraction_status
+                ),
+                "extracted_facts": json.loads(
+                    item.extracted_facts
+                    or "{}"
+                ),
+                "created_at": item.created_at,
             }
-            for it in items
+            for item in items
         ],
     }
 
+
+# ============================================================
+# ANALYZE
+# ============================================================
 
 @router.post("/{case_id}/analyze")
 def analyze_case_endpoint(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
         )
 
     try:
+
         decision = analyze_case(
             db=db,
             case=case,
         )
+
     except ValueError as exc:
+
         raise HTTPException(
             status_code=400,
             detail=str(exc),
@@ -384,42 +1733,62 @@ def analyze_case_endpoint(
 
     return {
         "status": "ok",
+
         "case": {
             "id": case.id,
             "status": case.status,
             "issue": case.issue,
-            "recommended_action": case.recommended_action,
+            "recommended_action": (
+                case.recommended_action
+            ),
             "priority": case.priority,
-            "decision_reason": case.decision_reason,
+            "decision_reason": (
+                case.decision_reason
+            ),
         },
+
         "decision": {
             "issue": decision.issue,
-            "recommended_action": decision.recommended_action,
+            "recommended_action": (
+                decision.recommended_action
+            ),
             "priority": decision.priority,
             "reason": decision.reason,
         },
     }
 
 
+# ============================================================
+# RESEARCH
+# ============================================================
+
 @router.post("/{case_id}/research")
 def research_case_endpoint(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
         )
 
     try:
+
         results = research_case(
             db=db,
             case=case,
         )
+
     except ValueError as exc:
+
         raise HTTPException(
             status_code=400,
             detail=str(exc),
@@ -427,55 +1796,89 @@ def research_case_endpoint(
 
     return {
         "status": "ok",
+
         "case": {
             "id": case.id,
             "status": case.status,
         },
+
         "research": [
             {
                 "source": result.source,
                 "title": result.title,
                 "summary": result.summary,
                 "relevance": result.relevance,
+                "url": getattr(
+                    result,
+                    "url",
+                    None,
+                ),
             }
             for result in results
         ],
     }
 
 
+# ============================================================
+# PLAN
+# ============================================================
+
 @router.post("/{case_id}/plan")
 def plan_case_endpoint(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
         )
 
-    if not case.issue or not case.recommended_action:
+    if (
+        not case.issue
+        or not case.recommended_action
+    ):
+
         raise HTTPException(
             status_code=400,
-            detail="Case must be analyzed before planning.",
+            detail=(
+                "Case must be analyzed "
+                "before planning."
+            ),
         )
 
     decision = CaseDecision(
         issue=case.issue,
-        recommended_action=case.recommended_action,
-        priority=case.priority or "MEDIUM",
-        reason=case.decision_reason or "",
+        recommended_action=(
+            case.recommended_action
+        ),
+        priority=(
+            case.priority
+            or "MEDIUM"
+        ),
+        reason=(
+            case.decision_reason
+            or ""
+        ),
     )
 
     try:
+
         plan = plan_case(
             db=db,
             case=case,
             decision=decision,
         )
+
     except ValueError as exc:
+
         raise HTTPException(
             status_code=400,
             detail=str(exc),
@@ -483,19 +1886,36 @@ def plan_case_endpoint(
 
     return {
         "status": "ok",
+
         "case": {
             "id": case.id,
             "status": case.status,
-            "approval_required": case.approval_required,
+            "approval_required": (
+                case.approval_required
+            ),
         },
+
         "plan": {
             "summary": plan.summary,
             "steps": plan.steps,
-            "approval_required": plan.approval_required,
+            "approval_required": (
+                plan.approval_required
+            ),
         },
     }
 
 
+# ============================================================
+# SYNTHESIS
+#
+# RESEARCH
+# ->
+# EVIDENCE
+# ->
+# DECISION
+# ->
+# PLAN
+# ============================================================
 
 @router.post("/{case_id}/synthesize")
 def synthesize_case_endpoint(
@@ -503,40 +1923,75 @@ def synthesize_case_endpoint(
     run_research: bool = False,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
         )
 
-    # Optionally run research first when requested and no persisted evidence exists
+    # ========================================================
+    # OPTIONAL RESEARCH
+    # ========================================================
+
     if run_research:
-        # check for existing persisted research
+
         existing = (
             db.query(CaseResearch)
-            .filter(CaseResearch.case_id == case.id)
+            .filter(
+                CaseResearch.case_id
+                == case.id
+            )
             .count()
         )
+
         if existing == 0:
-            # record orchestration activity
+
             record_activity(
                 db=db,
                 case_id=case.id,
-                event_type="SYNTHESIS_ORCHESTRATION",
-                message="Synthesis requested with research; invoking research.",
+                event_type=(
+                    "SYNTHESIS_ORCHESTRATION"
+                ),
+                message=(
+                    "Synthesis requested with "
+                    "research; invoking research."
+                ),
             )
 
             try:
-                research_case(db=db, case=case)
+
+                research_case(
+                    db=db,
+                    case=case,
+                )
+
             except ValueError as exc:
-                # propagate as HTTP 400 with the research error message
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(exc),
+                ) from exc
+
+    # ========================================================
+    # SYNTHESIS
+    # ========================================================
 
     try:
-        result = synthesize_evidence_and_plan(db=db, case=case)
+
+        result = synthesize_evidence_and_plan(
+            db=db,
+            case=case,
+        )
+
     except ValueError as exc:
+
         raise HTTPException(
             status_code=400,
             detail=str(exc),
@@ -544,51 +1999,93 @@ def synthesize_case_endpoint(
 
     return {
         "status": "ok",
+
         "case": {
             "id": case.id,
             "status": case.status,
             "issue": case.issue,
-            "recommended_action": case.recommended_action,
+            "recommended_action": (
+                case.recommended_action
+            ),
             "priority": case.priority,
-            "decision_reason": case.decision_reason,
-            "plan_summary": case.plan_summary,
-            "plan_steps": case.plan_steps,
-            "approval_required": case.approval_required,
+            "decision_reason": (
+                case.decision_reason
+            ),
+            "plan_summary": (
+                case.plan_summary
+            ),
+            "plan_steps": (
+                case.plan_steps
+            ),
+            "approval_required": (
+                case.approval_required
+            ),
         },
+
         "decision": {
-            "issue": result.get("issue"),
-            "recommended_action": result.get("recommended_action"),
-            "priority": result.get("priority"),
-            "reason": result.get("decision_reason"),
+            "issue": result.get(
+                "issue"
+            ),
+            "recommended_action": result.get(
+                "recommended_action"
+            ),
+            "priority": result.get(
+                "priority"
+            ),
+            "reason": result.get(
+                "decision_reason"
+            ),
         },
+
         "plan": {
-            "summary": result.get("plan_summary"),
-            "steps": result.get("plan_steps"),
-            "approval_required": result.get("approval_required"),
+            "summary": result.get(
+                "plan_summary"
+            ),
+            "steps": result.get(
+                "plan_steps"
+            ),
+            "approval_required": result.get(
+                "approval_required"
+            ),
         },
-        "evidence": result.get("evidence"),
+
+        "evidence": result.get(
+            "evidence"
+        ),
     }
 
+
+# ============================================================
+# REQUEST APPROVAL
+# ============================================================
 
 @router.post("/{case_id}/request-approval")
 def request_case_approval_endpoint(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
         )
 
     try:
+
         case = request_case_approval(
             db=db,
             case=case,
         )
+
     except ValueError as exc:
+
         raise HTTPException(
             status_code=400,
             detail=str(exc),
@@ -596,52 +2093,91 @@ def request_case_approval_endpoint(
 
     return {
         "status": "ok",
+
         "case": {
             "id": case.id,
             "status": case.status,
-            "recommended_action": case.recommended_action,
-            "approval_required": case.approval_required,
+            "recommended_action": (
+                case.recommended_action
+            ),
+            "approval_required": (
+                case.approval_required
+            ),
         },
     }
 
+
+# ============================================================
+# APPROVE
+# ============================================================
 
 @router.post("/{case_id}/approve")
 def approve_case_endpoint(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
         )
 
     try:
-        case = approve_case(db=db, case=case)
+
+        case = approve_case(
+            db=db,
+            case=case,
+        )
+
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
 
     return {
         "status": "ok",
+
         "case": {
             "id": case.id,
             "status": case.status,
-            "recommended_action": case.recommended_action,
-            "approval_required": case.approval_required,
+            "recommended_action": (
+                case.recommended_action
+            ),
+            "approval_required": (
+                case.approval_required
+            ),
         },
     }
 
+
+# ============================================================
+# GET SINGLE CASE
+#
+# KEEP THIS LAST
+# ============================================================
 
 @router.get("/{case_id}")
 def get_case(
     case_id: int,
     db: Session = Depends(get_db),
 ):
-    case = db.get(Case, case_id)
+
+    case = db.get(
+        Case,
+        case_id,
+    )
 
     if case is None:
+
         raise HTTPException(
             status_code=404,
             detail="Case not found.",
@@ -649,152 +2185,78 @@ def get_case(
 
     return {
         "status": "ok",
+
         "case": {
             "id": case.id,
+
             "title": case.title,
+
             "description": case.description,
+
             "passenger": case.passenger,
-            "booking_reference": case.booking_reference,
-            "organization": case.organization,
+
+            "booking_reference": (
+                case.booking_reference
+            ),
+
+            "organization": (
+                case.organization
+            ),
+
             "airline": case.airline,
-            "cancellation_date": case.cancellation_date,
+
+            "cancellation_date": (
+                case.cancellation_date
+            ),
+
             "amount": case.amount,
+
             "currency": case.currency,
-            "refund_received": case.refund_received,
-            "requested_resolution": case.requested_resolution,
-            "supporting_facts": case.supporting_facts,
+
+            "refund_received": (
+                case.refund_received
+            ),
+
+            "requested_resolution": (
+                case.requested_resolution
+            ),
+
+            "supporting_facts": (
+                case.supporting_facts
+            ),
+
             "issue": case.issue,
-            "recommended_action": case.recommended_action,
+
+            "recommended_action": (
+                case.recommended_action
+            ),
+
             "priority": case.priority,
-            "decision_reason": case.decision_reason,
-            "plan_summary": case.plan_summary,
-            "plan_steps": case.plan_steps,
-            "approval_required": case.approval_required,
+
+            "decision_reason": (
+                case.decision_reason
+            ),
+
+            "plan_summary": (
+                case.plan_summary
+            ),
+
+            "plan_steps": (
+                case.plan_steps
+            ),
+
+            "approval_required": (
+                case.approval_required
+            ),
+
             "status": case.status,
-            "created_at": case.created_at,
-            "updated_at": case.updated_at,
+
+            "created_at": (
+                case.created_at
+            ),
+
+            "updated_at": (
+                case.updated_at
+            ),
         },
     }
-
-
-@router.post("/parse")
-async def parse_case_document(
-    file: UploadFile = File(...),
-):
-    if not file.filename:
-        raise HTTPException(
-            status_code=400,
-            detail="A file is required.",
-        )
-
-    suffix = Path(file.filename).suffix or ".bin"
-
-    try:
-        with NamedTemporaryFile(
-            delete=False,
-            suffix=suffix,
-        ) as temp_file:
-            temp_file.write(await file.read())
-            temp_path = Path(temp_file.name)
-
-        try:
-            nutrient_response = await parse_document(
-                temp_path,
-                mode="understand",
-                output_format="spatial",
-            )
-        finally:
-            temp_path.unlink(missing_ok=True)
-
-        case = parse_case(nutrient_response)
-
-        return {
-            "status": "ok",
-            "case": {
-                "passenger": case.passenger,
-                "booking_reference": case.booking_reference,
-                "airline": case.airline,
-                "cancellation_date": case.cancellation_date,
-                "amount": case.amount,
-                "refund_received": case.refund_received,
-                "requested_resolution": case.requested_resolution,
-                "supporting_facts": case.supporting_facts,
-            },
-        }
-
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        ) from exc
-
-    except NutrientError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=str(exc),
-        ) from exc
-
-
-@router.post("/parse-and-create")
-async def parse_and_create_case(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-):
-    if not file.filename:
-        raise HTTPException(
-            status_code=400,
-            detail="A file is required.",
-        )
-
-    suffix = Path(file.filename).suffix or ".bin"
-
-    try:
-        with NamedTemporaryFile(
-            delete=False,
-            suffix=suffix,
-        ) as temp_file:
-            temp_file.write(await file.read())
-            temp_path = Path(temp_file.name)
-
-        try:
-            nutrient_response = await parse_document(
-                temp_path,
-                mode="understand",
-                output_format="spatial",
-            )
-        finally:
-            temp_path.unlink(missing_ok=True)
-
-        parsed_case = parse_case(nutrient_response)
-        case = persist_parsed_case(
-            db,
-            parsed_case,
-        )
-
-        return {
-            "status": "ok",
-            "case": {
-                "id": case.id,
-                "passenger": case.passenger,
-                "booking_reference": case.booking_reference,
-                "airline": case.airline,
-                "cancellation_date": case.cancellation_date,
-                "amount": case.amount,
-                "refund_received": case.refund_received,
-                "requested_resolution": case.requested_resolution,
-                "supporting_facts": case.supporting_facts,
-                "status": case.status,
-            },
-        }
-
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        ) from exc
-
-    except NutrientError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=str(exc),
-        ) from exc
