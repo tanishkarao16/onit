@@ -57,7 +57,7 @@ def test_upload_file_triggers_nutrient_and_persist(monkeypatch):
         cid = resp.json()["case"]["id"]
 
         # mock parse_document to return structured output
-        async def fake_parse(path):
+        async def fake_parse(path, **kwargs):
             return {"output": {"elements": [{"role": "Text", "text": "Passenger: Jane Doe\nBooking reference: XYZ789\nAirline: ExampleAir\nAmount paid: Y50,000"}]}}
 
         monkeypatch.setattr("app.api.cases.parse_document", fake_parse)
