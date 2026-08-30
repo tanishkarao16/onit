@@ -927,11 +927,8 @@ export default function CasePage() {
     "EVIDENCE_READY";
 
   const researchRunning =
-    normalizedStatus ===
-    "RESEARCHING";
-
-    normalizedStatus ===
-    "RESEARCHED";
+    normalizedStatus === "RESEARCHING" ||
+    normalizedStatus === "RESEARCHED";
 
   const canRequestApproval =
     normalizedStatus ===
