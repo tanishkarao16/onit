@@ -25,10 +25,17 @@ from app.models.case import (
     CaseActivity,
     CaseEvidence,
     CaseResearch,
+    CaseResponse,
     CaseStatus,
 )
 
 from app.services.case_analysis import analyze_case
+
+from app.services.case_response import (
+    record_case_response,
+    send_case_follow_up,
+)
+
 
 from app.services.case_approval import (
     approve_case,
@@ -55,6 +62,10 @@ from app.services.evidence_to_decision import (
 
 from app.services.case_activity import (
     record_activity,
+)
+
+from app.services.case_execution import (
+    execute_case,
 )
 
 
@@ -2155,6 +2166,167 @@ def approve_case_endpoint(
             "approval_required": (
                 case.approval_required
             ),
+        },
+    }
+
+
+# ============================================================
+# EXECUTE
+# ============================================================
+
+@router.post("/{case_id}/execute")
+def execute_case_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+
+    case = db.get(
+        Case,
+        case_id,
+    )
+
+    if case is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    try:
+
+        case = execute_case(
+            db=db,
+            case=case,
+        )
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "status": "ok",
+
+        "case": {
+            "id": case.id,
+
+            "status": case.status,
+
+            "recommended_action": (
+                case.recommended_action
+            ),
+
+            "approval_required": (
+                case.approval_required
+            ),
+
+            "plan_summary": (
+                case.plan_summary
+            ),
+
+            "plan_steps": (
+                case.plan_steps
+            ),
+        },
+    }
+
+
+# ============================================================
+# RESPONSE
+# ============================================================
+
+@router.post("/{case_id}/response")
+def record_response_endpoint(
+    case_id: int,
+    response_type: str,
+    message: str,
+    resolved: bool = False,
+    db: Session = Depends(get_db),
+):
+
+    case = db.get(
+        Case,
+        case_id,
+    )
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    try:
+        response = record_case_response(
+            db=db,
+            case=case,
+            response_type=response_type,
+            message=message,
+            resolved=resolved,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "status": "ok",
+        "response": {
+            "id": response.id,
+            "case_id": response.case_id,
+            "response_type": response.response_type,
+            "message": response.message,
+            "resolved": response.resolved,
+            "created_at": response.created_at,
+        },
+        "case": {
+            "id": case.id,
+            "status": case.status,
+        },
+    }
+
+
+# ============================================================
+# FOLLOW-UP
+# ============================================================
+
+@router.post("/{case_id}/follow-up")
+def send_follow_up_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+
+    case = db.get(
+        Case,
+        case_id,
+    )
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    try:
+        case = send_case_follow_up(
+            db=db,
+            case=case,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "status": "ok",
+        "case": {
+            "id": case.id,
+            "status": case.status,
         },
     }
 

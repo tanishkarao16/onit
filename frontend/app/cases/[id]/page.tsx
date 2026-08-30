@@ -580,7 +580,10 @@ export default function CasePage() {
   const [showReview, setShowReview] =
     useState(false);
 
-  const [approving, setApproving] =
+   const [approving, setApproving] =
+    useState(false);
+
+  const [executing, setExecuting] =
     useState(false);
 
   const loadCase = useCallback(
@@ -814,6 +817,46 @@ export default function CasePage() {
     }
   }
 
+  async function executeAction() {
+    if (!caseItem) {
+      return;
+    }
+
+    try {
+      setExecuting(true);
+      setError("");
+
+      const response = await fetch(
+        `${API_URL}/cases/${caseItem.id}/execute`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ??
+            "Unable to execute action.",
+        );
+      }
+
+      await loadCase();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to execute action.",
+      );
+    } finally {
+      setExecuting(false);
+    }
+  }
+
   async function runResearch() {
     if (!caseItem) {
       return;
@@ -917,7 +960,7 @@ export default function CasePage() {
     }
   }
 
-  const normalizedStatus =
+    const normalizedStatus =
     normalizeStatus(
       caseItem?.status,
     );
@@ -930,10 +973,6 @@ export default function CasePage() {
     normalizedStatus === "RESEARCHING" ||
     normalizedStatus === "RESEARCHED";
 
-  const canRequestApproval =
-    normalizedStatus ===
-    "ACTION_READY";
-
   const awaitingApproval =
     normalizedStatus ===
     "AWAITING_APPROVAL";
@@ -942,11 +981,36 @@ export default function CasePage() {
     normalizedStatus ===
     "ACTION_READY";
 
+  const approvalGranted =
+    activities.some(
+      (activity) =>
+        normalizeStatus(
+          activity.event_type,
+        ) === "APPROVAL_GRANTED",
+    );
+
+  const canRequestApproval =
+    actionReady &&
+    !approvalGranted;
+
+  const canExecute =
+    actionReady &&
+    approvalGranted;
+
+  const submitted =
+    normalizedStatus ===
+    "SUBMITTED";
+
+  const waitingForResponse =
+    normalizedStatus ===
+    "WAITING_FOR_RESPONSE";
+
   const resolved =
     normalizedStatus ===
       "RESOLVED" ||
     normalizedStatus ===
       "CLOSED";
+
 
   const workflow = useMemo(() => {
     const currentIndex =
@@ -1130,39 +1194,43 @@ export default function CasePage() {
         {/* PRIMARY ACTION */}
 
         {(canResearch ||
-          canRequestApproval) && (
+          canRequestApproval ||
+          canExecute) && (
           <section className="mt-8">
             <div className="rounded-2xl bg-[#171717] p-6 text-white shadow-[0_14px_50px_rgba(0,0,0,0.08)]">
               <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
+
                 <div>
                   <p className="text-xs font-semibold tracking-[0.16em] text-white/50">
                     {canResearch
                       ? "RESEARCH READY"
-                      : "DECISION READY"}
+                      : canRequestApproval
+                        ? "DECISION READY"
+                        : "ACTION READY"}
                   </p>
 
                   <h2 className="mt-2 text-xl font-semibold">
                     {canResearch
                       ? "ONIT can investigate this case."
-                      : "ONIT has prepared an action."}
+                      : canRequestApproval
+                        ? "ONIT has prepared an action."
+                        : "The approved action is ready to execute."}
                   </h2>
 
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
                     {canResearch
                       ? "ONIT has enough case information to begin focused external research."
-                      : "The recommendation and execution plan are ready for your review."}
+                      : canRequestApproval
+                        ? "The recommendation and execution plan are ready for your review."
+                        : "Human approval has been recorded. ONIT can now submit the prepared action."}
                   </p>
                 </div>
 
                 {canResearch && (
                   <button
                     type="button"
-                    onClick={
-                      runResearch
-                    }
-                    disabled={
-                      actionLoading
-                    }
+                    onClick={runResearch}
+                    disabled={actionLoading}
                     className="shrink-0 rounded-full bg-white px-5 py-3 text-sm font-medium text-[#171717] transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {actionLoading
@@ -1174,12 +1242,8 @@ export default function CasePage() {
                 {canRequestApproval && (
                   <button
                     type="button"
-                    onClick={
-                      requestApproval
-                    }
-                    disabled={
-                      actionLoading
-                    }
+                    onClick={requestApproval}
+                    disabled={actionLoading}
                     className="shrink-0 rounded-full bg-white px-5 py-3 text-sm font-medium text-[#171717] transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {actionLoading
@@ -1187,6 +1251,20 @@ export default function CasePage() {
                       : "Request approval →"}
                   </button>
                 )}
+
+                {canExecute && (
+                  <button
+                    type="button"
+                    onClick={executeAction}
+                    disabled={executing}
+                    className="shrink-0 rounded-full bg-white px-5 py-3 text-sm font-semibold text-[#171717] transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {executing
+                      ? "Executing..."
+                      : "Execute action →"}
+                  </button>
+                )}
+
               </div>
             </div>
           </section>

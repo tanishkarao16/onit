@@ -346,3 +346,44 @@ class CaseEvidence(Base):
         default=datetime.utcnow,
         nullable=False,
     )
+
+# ============================================================
+# CASE RESPONSE
+# ============================================================
+
+class CaseResponse(Base):
+    __tablename__ = "case_responses"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    case_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    response_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    resolved: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
