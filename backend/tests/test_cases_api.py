@@ -276,8 +276,8 @@ def test_synthesize_endpoint_success_and_variants():
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["case"]["status"] == "ACTION_READY"
-        assert data["case"]["approval_required"] is False
+        assert data["case"]["status"] == "AWAITING_APPROVAL"
+        assert data["case"]["approval_required"] is True
 
         # missing case
         resp2 = client.post("/cases/99999/synthesize")
@@ -371,8 +371,8 @@ def test_synthesize_run_research_triggers_when_missing(monkeypatch):
         resp = client.post(f"/cases/{cid}/synthesize?run_research=true")
         assert resp.status_code == 200
         j = resp.json()
-        assert j["case"]["status"] == "ACTION_READY"
-        assert j["case"]["approval_required"] is False
+        assert j["case"]["status"] == "AWAITING_APPROVAL"
+        assert j["case"]["approval_required"] is True
 
     finally:
         db.close()

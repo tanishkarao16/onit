@@ -50,8 +50,8 @@ def test_synthesize_with_authoritative_research(monkeypatch):
         assert res["plan_summary"]
         assert isinstance(res["plan_steps"], list)
         # authoritative evidence should allow auto-action
-        assert res["approval_required"] is False
-        assert res["status"] == CaseStatus.ACTION_READY
+        assert res["approval_required"] is True
+        assert res["status"] == CaseStatus.AWAITING_APPROVAL
 
     finally:
         db.close()
