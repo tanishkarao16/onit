@@ -2355,6 +2355,17 @@ def get_case(
             detail="Case not found.",
         )
 
+    responses = (
+        db.query(CaseResponse)
+        .filter(
+            CaseResponse.case_id == case.id
+        )
+        .order_by(
+            CaseResponse.created_at.asc()
+        )
+        .all()
+    )
+
     return {
         "status": "ok",
 
@@ -2431,4 +2442,16 @@ def get_case(
                 case.updated_at
             ),
         },
+
+        "responses": [
+            {
+                "id": response.id,
+                "case_id": response.case_id,
+                "response_type": response.response_type,
+                "message": response.message,
+                "resolved": response.resolved,
+                "created_at": response.created_at,
+            }
+            for response in responses
+        ],
     }

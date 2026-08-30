@@ -72,13 +72,24 @@ type EvidenceItem = {
   created_at: string;
 };
 
+type ResponseItem = {
+  id: number;
+  response_type: string;
+  message: string;
+  resolved: boolean;
+  created_at: string;
+};
+
 type WorkflowStatus =
   | "CREATED"
   | "EVIDENCE_READY"
   | "RESEARCHING"
-  | "RESEARCHED"
   | "ACTION_READY"
   | "AWAITING_APPROVAL"
+  | "SUBMITTED"
+  | "WAITING_FOR_RESPONSE"
+  | "FOLLOW_UP_REQUIRED"
+  | "ESCALATION_REQUIRED"
   | "RESOLVED"
   | "CLOSED";
 
@@ -90,21 +101,28 @@ const WORKFLOW_STATUSES: WorkflowStatus[] = [
   "CREATED",
   "EVIDENCE_READY",
   "RESEARCHING",
-  "RESEARCHED",
   "ACTION_READY",
   "AWAITING_APPROVAL",
+  "SUBMITTED",
+  "WAITING_FOR_RESPONSE",
+  "FOLLOW_UP_REQUIRED",
+  "ESCALATION_REQUIRED",
   "RESOLVED",
+  "CLOSED",
 ];
 
 const WORKFLOW_LABELS: Record<string, string> = {
   CREATED: "Case",
   EVIDENCE_READY: "Evidence",
   RESEARCHING: "Research",
-  RESEARCHED: "Research",
   ACTION_READY: "Decision",
   AWAITING_APPROVAL: "Approval",
+  SUBMITTED: "Submitted",
+  WAITING_FOR_RESPONSE: "Response",
+  FOLLOW_UP_REQUIRED: "Follow-up",
+  ESCALATION_REQUIRED: "Escalation",
   RESOLVED: "Resolution",
-  CLOSED: "Resolution",
+  CLOSED: "Closed",
 };
 
 function normalizeStatus(
@@ -299,11 +317,16 @@ function StatusPill({
     normalized === "CLOSED";
 
   const research =
-    normalized === "RESEARCHING" ||
-    normalized === "RESEARCHED";
+    normalized === "RESEARCHING";
 
   const evidence =
     normalized === "EVIDENCE_READY";
+
+  const postExecution =
+    normalized === "SUBMITTED" ||
+    normalized === "WAITING_FOR_RESPONSE" ||
+    normalized === "FOLLOW_UP_REQUIRED" ||
+    normalized === "ESCALATION_REQUIRED";
 
   return (
     <span
@@ -318,7 +341,9 @@ function StatusPill({
               ? "bg-blue-50 text-blue-700"
               : evidence
                 ? "bg-violet-50 text-violet-700"
-                : "bg-zinc-100 text-zinc-600",
+                : postExecution
+                  ? "bg-zinc-100 text-zinc-600"
+                  : "bg-zinc-100 text-zinc-600",
       ].join(" ")}
     >
       <span
@@ -332,7 +357,9 @@ function StatusPill({
                 ? "bg-blue-500"
                 : evidence
                   ? "bg-violet-500"
-                  : "bg-zinc-400",
+                  : postExecution
+                    ? "bg-zinc-400"
+                    : "bg-zinc-400",
         ].join(" ")}
       />
 
@@ -565,6 +592,9 @@ export default function CasePage() {
   const [evidence, setEvidence] =
     useState<EvidenceItem[]>([]);
 
+  const [responses, setResponses] =
+    useState<ResponseItem[]>([]);
+
   const [loading, setLoading] =
     useState(true);
 
@@ -584,6 +614,12 @@ export default function CasePage() {
     useState(false);
 
   const [executing, setExecuting] =
+    useState(false);
+
+  const [followUpLoading, setFollowUpLoading] =
+    useState(false);
+
+  const [recordResponseLoading, setRecordResponseLoading] =
     useState(false);
 
   const loadCase = useCallback(
@@ -630,13 +666,14 @@ export default function CasePage() {
                 signal,
               },
             ),
+
           ]);
 
         const [
           caseResponse,
           activityResponse,
           researchResponse,
-          evidenceResponse,
+          evidenceResponse
         ] = responses;
 
         if (!caseResponse.ok) {
@@ -671,6 +708,12 @@ export default function CasePage() {
           caseData?.case ?? null,
         );
 
+        setResponses(
+          Array.isArray(caseData?.responses)
+            ? caseData.responses
+            : [],
+        );
+
         setActivities(
           Array.isArray(
             activityData?.activities,
@@ -694,6 +737,7 @@ export default function CasePage() {
             ? evidenceData.evidence
             : [],
         );
+
       } catch (err) {
         if (
           err instanceof DOMException &&
@@ -817,47 +861,140 @@ export default function CasePage() {
     }
   }
 
-  async function executeAction() {
-    if (!caseItem) {
-      return;
-    }
+   async function executeAction() {
+     if (!caseItem) {
+       return;
+     }
 
-    try {
-      setExecuting(true);
-      setError("");
+     try {
+       setExecuting(true);
+       setError("");
 
-      const response = await fetch(
-        `${API_URL}/cases/${caseItem.id}/execute`,
-        {
-          method: "POST",
-        },
-      );
+       const response = await fetch(
+         `${API_URL}/cases/${caseItem.id}/execute`,
+         {
+           method: "POST",
+         },
+       );
 
-      const data =
-        await response
-          .json()
-          .catch(() => ({}));
+       const data =
+         await response
+           .json()
+           .catch(() => ({}));
 
-      if (!response.ok) {
-        throw new Error(
-          data?.detail ??
-            "Unable to execute action.",
-        );
-      }
+       if (!response.ok) {
+         throw new Error(
+           data?.detail ??
+             "Unable to execute action.",
+         );
+       }
 
-      await loadCase();
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to execute action.",
-      );
-    } finally {
-      setExecuting(false);
-    }
-  }
+       await loadCase();
+     } catch (err) {
+       setError(
+         err instanceof Error
+           ? err.message
+           : "Unable to execute action.",
+       );
+     } finally {
+       setExecuting(false);
+     }
+   }
 
-  async function runResearch() {
+   async function sendFollowUp() {
+     if (!caseItem) {
+       return;
+     }
+
+     try {
+       setFollowUpLoading(true);
+       setError("");
+
+       const response = await fetch(
+         `${API_URL}/cases/${caseItem.id}/follow-up`,
+         {
+           method: "POST",
+         },
+       );
+
+       const data =
+         await response
+           .json()
+           .catch(() => ({}));
+
+       if (!response.ok) {
+         throw new Error(
+           data?.detail ??
+             "Unable to send follow-up.",
+         );
+       }
+
+       await loadCase();
+     } catch (err) {
+       setError(
+         err instanceof Error
+           ? err.message
+           : "Unable to send follow-up.",
+       );
+     } finally {
+       setFollowUpLoading(false);
+     }
+   }
+
+   async function recordResponse(
+     responseType: string,
+     message: string,
+     resolved: boolean,
+   ) {
+     if (!caseItem) {
+       return;
+     }
+
+     try {
+       setRecordResponseLoading(true);
+       setError("");
+
+       const response = await fetch(
+         `${API_URL}/cases/${caseItem.id}/response`,
+         {
+           method: "POST",
+           headers: {
+             "Content-Type":
+               "application/json",
+           },
+           body: JSON.stringify({
+             response_type: responseType,
+             message,
+             resolved,
+           }),
+         },
+       );
+
+       const data =
+         await response
+           .json()
+           .catch(() => ({}));
+
+       if (!response.ok) {
+         throw new Error(
+           data?.detail ??
+             "Unable to record response.",
+         );
+       }
+
+       await loadCase();
+     } catch (err) {
+       setError(
+         err instanceof Error
+           ? err.message
+           : "Unable to record response.",
+       );
+     } finally {
+       setRecordResponseLoading(false);
+     }
+   }
+
+   async function runResearch() {
     if (!caseItem) {
       return;
     }
@@ -970,8 +1107,7 @@ export default function CasePage() {
     "EVIDENCE_READY";
 
   const researchRunning =
-    normalizedStatus === "RESEARCHING" ||
-    normalizedStatus === "RESEARCHED";
+    normalizedStatus === "RESEARCHING";
 
   const awaitingApproval =
     normalizedStatus ===
@@ -1004,6 +1140,14 @@ export default function CasePage() {
   const waitingForResponse =
     normalizedStatus ===
     "WAITING_FOR_RESPONSE";
+
+  const followUpRequired =
+    normalizedStatus ===
+    "FOLLOW_UP_REQUIRED";
+
+  const escalationRequired =
+    normalizedStatus ===
+    "ESCALATION_REQUIRED";
 
   const resolved =
     normalizedStatus ===
@@ -1195,7 +1339,11 @@ export default function CasePage() {
 
         {(canResearch ||
           canRequestApproval ||
-          canExecute) && (
+          canExecute ||
+          submitted ||
+          waitingForResponse ||
+          followUpRequired ||
+          escalationRequired) && (
           <section className="mt-8">
             <div className="rounded-2xl bg-[#171717] p-6 text-white shadow-[0_14px_50px_rgba(0,0,0,0.08)]">
               <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
@@ -1206,7 +1354,15 @@ export default function CasePage() {
                       ? "RESEARCH READY"
                       : canRequestApproval
                         ? "DECISION READY"
-                        : "ACTION READY"}
+                        : canExecute
+                          ? "ACTION READY"
+                          : submitted
+                            ? "ACTION SUBMITTED"
+                            : waitingForResponse
+                              ? "AWAITING RESPONSE"
+                              : followUpRequired
+                                ? "FOLLOW-UP REQUIRED"
+                                : "ESCALATION REQUIRED"}
                   </p>
 
                   <h2 className="mt-2 text-xl font-semibold">
@@ -1214,7 +1370,15 @@ export default function CasePage() {
                       ? "ONIT can investigate this case."
                       : canRequestApproval
                         ? "ONIT has prepared an action."
-                        : "The approved action is ready to execute."}
+                        : canExecute
+                          ? "The approved action is ready to execute."
+                          : submitted
+                            ? "Action submitted."
+                            : waitingForResponse
+                              ? "Waiting for a response."
+                              : followUpRequired
+                                ? "Follow-up required."
+                                : "This case requires escalation."}
                   </h2>
 
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
@@ -1222,7 +1386,15 @@ export default function CasePage() {
                       ? "ONIT has enough case information to begin focused external research."
                       : canRequestApproval
                         ? "The recommendation and execution plan are ready for your review."
-                        : "Human approval has been recorded. ONIT can now submit the prepared action."}
+                        : canExecute
+                          ? "Human approval has been recorded. ONIT can now submit the prepared action."
+                          : submitted
+                            ? "ONIT has submitted the approved action and is awaiting the external organization's response."
+                            : waitingForResponse
+                              ? "The action has been submitted and ONIT is now waiting for the external organization to respond."
+                              : followUpRequired
+                                ? "The external response requires further action. ONIT will send a follow-up to continue progressing this case."
+                                : "This case has been flagged for escalation and will require additional attention."}
                   </p>
                 </div>
 
@@ -1265,6 +1437,19 @@ export default function CasePage() {
                   </button>
                 )}
 
+                {followUpRequired && (
+                  <button
+                    type="button"
+                    onClick={sendFollowUp}
+                    disabled={followUpLoading}
+                    className="shrink-0 rounded-full bg-white px-5 py-3 text-sm font-medium text-[#171717] transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {followUpLoading
+                      ? "Sending..."
+                      : "Send follow-up →"}
+                  </button>
+                )}
+
               </div>
             </div>
           </section>
@@ -1285,6 +1470,86 @@ export default function CasePage() {
 
               <p className="mt-2 text-sm leading-6 text-blue-900/70">
                 External sources are being evaluated against the case facts.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* SUBMITTED STATE */}
+
+        {submitted && (
+          <section className="mt-8">
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-6">
+              <p className="text-xs font-semibold tracking-[0.16em] text-zinc-600">
+                ACTION SUBMITTED
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-zinc-900">
+                Action submitted.
+              </h2>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-700">
+                ONIT has submitted the approved action and is awaiting the external organization&apos;s response.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* WAITING FOR RESPONSE STATE */}
+
+        {waitingForResponse && (
+          <section className="mt-8">
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-6">
+              <p className="text-xs font-semibold tracking-[0.16em] text-zinc-600">
+                AWAITING RESPONSE
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-zinc-900">
+                Waiting for a response.
+              </h2>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-700">
+                The action has been submitted and ONIT is now waiting for the external organization to respond.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* FOLLOW-UP REQUIRED STATE */}
+
+        {followUpRequired && (
+          <section className="mt-8">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+              <p className="text-xs font-semibold tracking-[0.16em] text-amber-700">
+                FOLLOW-UP REQUIRED
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-amber-950">
+                Follow-up required.
+              </h2>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-amber-900/70">
+                The external response requires further action.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* ESCALATION REQUIRED STATE */}
+
+        {escalationRequired && (
+          <section className="mt-8">
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-6">
+              <p className="text-xs font-semibold tracking-[0.16em] text-red-700">
+                ESCALATION REQUIRED
+              </p>
+
+              <h2 className="mt-2 text-xl font-semibold text-red-950">
+                This case requires escalation.
+              </h2>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-red-900/70">
+                The case has been flagged for escalation and will require additional attention.
               </p>
             </div>
           </section>
@@ -1819,17 +2084,98 @@ export default function CasePage() {
                       awaitingApproval
                         ? "Your review is required before proceeding."
                         : actionReady ||
+                            submitted ||
+                            waitingForResponse ||
+                            followUpRequired ||
+                            escalationRequired ||
                             resolved
                           ? "Human approval has been recorded."
                           : "Approval will be requested when the action is ready."
                     }
                     state={
                       actionReady ||
+                      submitted ||
+                      waitingForResponse ||
+                      followUpRequired ||
+                      escalationRequired ||
                       resolved
                         ? "complete"
                         : awaitingApproval
                           ? "current"
                           : "upcoming"
+                    }
+                  />
+
+                  <Step
+                    number="6"
+                    title="Action submitted"
+                    description={
+                      submitted ||
+                      waitingForResponse ||
+                      followUpRequired ||
+                      escalationRequired ||
+                        resolved
+                        ? "ONIT submitted the prepared action."
+                        : "The approved action will be submitted for execution."
+                    }
+                    state={
+                      submitted ||
+                      waitingForResponse ||
+                      followUpRequired ||
+                      escalationRequired ||
+                      resolved
+                        ? "complete"
+                        : actionReady ||
+                          awaitingApproval
+                          ? "current"
+                          : "upcoming"
+                    }
+                  />
+
+                  <Step
+                    number="7"
+                    title="Response received"
+                    description={
+                      responses.length >
+                      0
+                        ? `${responses.length} response${
+                            responses.length ===
+                            1
+                              ? ""
+                              : "s"
+                          } received.`
+                        : waitingForResponse ||
+                            followUpRequired ||
+                            escalationRequired ||
+                            resolved
+                          ? "ONIT is tracking the external response."
+                          : "Waiting for the external organization to respond."
+                    }
+                    state={
+                      responses.length >
+                      0
+                        ? "complete"
+                        : waitingForResponse ||
+                            followUpRequired ||
+                            escalationRequired ||
+                            resolved
+                          ? "current"
+                          : "upcoming"
+                    }
+                  />
+
+                  <Step
+                    number="8"
+                    title="Resolution"
+                    description={
+                      resolved
+                        ? "This case has been resolved."
+                        : "The case will be resolved once a satisfactory response is received."
+                    }
+                    state={
+                      resolved
+                        ? "complete"
+                        : "upcoming"
                     }
                   />
                 </div>
@@ -2160,6 +2506,204 @@ export default function CasePage() {
               <p className="mt-2 text-sm leading-6 text-emerald-900/70">
                 ONIT has recorded the case as complete.
               </p>
+
+              {responses.length >
+               0 && (
+                <div className="mt-5 rounded-xl border border-emerald-900/10 bg-white p-5">
+                  <p className="text-xs uppercase tracking-[0.1em] text-[#8a8a86]">
+                    Latest response
+                  </p>
+
+                  <p className="mt-2 text-sm font-semibold">
+                    {
+                      responses[responses.length -
+                        1].response_type
+                    }
+                  </p>
+
+                  <p className="mt-2 whitespace-pre-line text-sm leading-7 text-[#454542]">
+                    {
+                      responses[responses.length -
+                        1].message
+                    }
+                  </p>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* RESPONSES */}
+
+        <section className="mt-12">
+          <SectionLabel>
+            RESPONSES
+          </SectionLabel>
+
+          <p className="mt-1 text-sm text-[#73736e]">
+            Responses received from the external organization.
+          </p>
+
+          {responses.length ===
+          0 ? (
+            <div className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
+              <p className="text-sm font-medium">
+                No responses recorded yet.
+              </p>
+
+              <p className="mt-2 text-sm leading-6 text-[#8a8a86]">
+                Responses will appear here once the external organization replies.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-4">
+              {responses.map(
+                (item) => (
+                  <div
+                    key={
+                      item.id
+                    }
+                    className="rounded-2xl border border-black/[0.08] bg-white p-6"
+                  >
+                    <div className="flex flex-col justify-between gap-3 sm:flex-row">
+                      <div>
+                        <p className="text-sm font-semibold">
+                          {formatLabel(
+                            item.response_type,
+                          )}
+                        </p>
+
+                        <p className="mt-1 text-xs text-[#8a8a86]">
+                          {item.resolved
+                            ? "Resolved"
+                            : "Follow-up required"}
+                        </p>
+                      </div>
+
+                      <span className="text-xs text-[#a0a09b]">
+                        {formatDate(
+                          item.created_at,
+                        )}
+                      </span>
+                    </div>
+
+                    <p className="mt-4 whitespace-pre-line text-sm leading-7 text-[#595955]">
+                      {item.message}
+                    </p>
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* RESPONSE RECORDING */}
+
+        {(waitingForResponse ||
+          followUpRequired) && (
+          <section className="mt-12">
+            <SectionLabel>
+              RECORD RESPONSE
+            </SectionLabel>
+
+            <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-6">
+              <p className="text-sm font-medium">
+                Simulate an external response for development and testing.
+              </p>
+
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-[0.08em] text-[#8a8a86]">
+                    Response type
+                  </label>
+
+                  <input
+                    type="text"
+                    id="response-type"
+                    defaultValue="REFUND_APPROVED"
+                    className="mt-2 w-full rounded-xl border border-black/10 bg-[#f7f7f5] px-4 py-2.5 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-[0.08em] text-[#8a8a86]">
+                    Message
+                  </label>
+
+                  <input
+                    type="text"
+                    id="response-message"
+                    defaultValue="Airline confirmed the refund."
+                    className="mt-2 w-full rounded-xl border border-black/10 bg-[#f7f7f5] px-4 py-2.5 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-[#454542]">
+                  <input
+                    type="checkbox"
+                    id="response-resolved"
+                    defaultChecked
+                    className="h-4 w-4 rounded border-black/20"
+                  />
+
+                  Resolves case
+                </label>
+              </div>
+
+              <div className="mt-5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const type =
+                      document.getElementById(
+                        "response-type",
+                      ) as
+                        | HTMLInputElement
+                        | null;
+
+                    const message =
+                      document.getElementById(
+                        "response-message",
+                      ) as
+                        | HTMLInputElement
+                        | null;
+
+                    const resolved =
+                      document.getElementById(
+                        "response-resolved",
+                      ) as
+                        | HTMLInputElement
+                        | null;
+
+                    if (
+                      !type ||
+                      !message
+                    ) {
+                      return;
+                    }
+
+                    void recordResponse(
+                      type.value ||
+                        "UNKNOWN",
+                      message.value,
+                      resolved
+                        ? resolved
+                            .checked
+                        : false,
+                    );
+                  }}
+                  disabled={
+                    recordResponseLoading
+                  }
+                  className="rounded-full bg-[#171717] px-5 py-3 text-sm font-medium text-white transition hover:bg-[#30302d] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {recordResponseLoading
+                    ? "Recording..."
+                    : "Record response →"}
+                </button>
+              </div>
             </div>
           </section>
         )}
