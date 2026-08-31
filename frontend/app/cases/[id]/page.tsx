@@ -40,6 +40,15 @@ type CaseItem = {
 
   approval_required?: boolean | null;
 
+  evidence_strength?: string | null;
+  confidence?: number | null;
+  stance?: {
+    supporting: number;
+    conflicting: number;
+    uncertain: number;
+    total: number;
+  } | null;
+
   status: string;
   created_at: string;
   updated_at: string;
@@ -1644,7 +1653,10 @@ export default function CasePage() {
               </SectionLabel>
 
               <p className="mt-1 text-sm text-[#73736e]">
-                Documents and facts ONIT can use to understand the case.
+                {evidence.length >
+                0
+                  ? "Documents processed by Nutrient and facts ONIT extracted to understand the case."
+                  : "Documents and facts ONIT can use to understand the case."}
               </p>
             </div>
 
@@ -1847,6 +1859,35 @@ export default function CasePage() {
                 />
               )}
 
+              {caseItem.evidence_strength && (
+                <AssessmentRow
+                  label="Evidence strength"
+                  value={formatStatus(
+                    caseItem.evidence_strength,
+                  )}
+                />
+              )}
+
+              {caseItem.confidence !==
+                null &&
+                caseItem.confidence !==
+                undefined && (
+                <AssessmentRow
+                  label="Confidence"
+                  value={`${caseItem.confidence}%`}
+                />
+              )}
+
+              {caseItem.stance && (
+                <AssessmentRow
+                  label="Evidence breakdown"
+                  value={`${caseItem.stance.supporting} supporting, ${caseItem.stance.conflicting} conflicting, ${caseItem.stance.uncertain} uncertain (${caseItem.stance.total} total)`}
+                  last={
+                    !caseItem.decision_reason
+                  }
+                />
+              )}
+
               {caseItem.decision_reason && (
                 <AssessmentRow
                   label="Why"
@@ -1868,7 +1909,10 @@ export default function CasePage() {
           </SectionLabel>
 
           <p className="mt-1 text-sm text-[#73736e]">
-            Sources ONIT used to validate the case and support its decision.
+            {research.length >
+            0
+              ? "Sources ONIT retrieved to validate the case and support its decision."
+              : "Sources ONIT used to validate the case and support its decision."}
           </p>
 
           {research.length ===

@@ -2046,6 +2046,12 @@ def synthesize_case_endpoint(
             "reason": result.get(
                 "decision_reason"
             ),
+            "confidence": result.get(
+                "confidence"
+            ),
+            "evidence_strength": result.get(
+                "evidence_strength"
+            ),
         },
 
         "plan": {
@@ -2062,6 +2068,10 @@ def synthesize_case_endpoint(
 
         "evidence": result.get(
             "evidence"
+        ),
+
+        "stance": result.get(
+            "stance"
         ),
     }
 
@@ -2366,6 +2376,76 @@ def get_case(
         .all()
     )
 
+    research_items = (
+        db.query(CaseResearch)
+        .filter(
+            CaseResearch.case_id == case.id
+        )
+        .order_by(
+            CaseResearch.created_at.asc()
+        )
+        .all()
+    )
+
+    evidence_strength = "insufficient"
+    confidence = 0
+    stance = {
+        "supporting": 0,
+        "conflicting": 0,
+        "uncertain": 0,
+        "total": 0,
+    }
+
+    if research_items:
+        high = sum(
+            1
+            for item in research_items
+            if (item.relevance or "").lower() == "high"
+        )
+
+        if high >= 2:
+            evidence_strength = "strong"
+        elif high >= 1 or len(research_items) >= 3:
+            evidence_strength = "moderate"
+
+        confidence = 50 + min(high * 10, 30)
+
+        authoritative = sum(
+            1
+            for item in research_items
+            if item.url and ".gov" in item.url.lower()
+        )
+        confidence += min(authoritative * 5, 10)
+
+        if len(research_items) >= 5:
+            confidence += 5
+        elif len(research_items) >= 3:
+            confidence += 3
+
+        confidence = max(0, min(100, confidence))
+
+        supporting = 0
+        uncertain = 0
+        for item in research_items:
+            url = (item.url or "").lower()
+            source = (item.source or "").lower()
+            relevance = (item.relevance or "").lower()
+
+            if relevance == "high":
+                if ".gov" in url or "official" in source:
+                    supporting += 1
+                else:
+                    uncertain += 1
+            else:
+                uncertain += 1
+
+        stance = {
+            "supporting": supporting,
+            "conflicting": 0,
+            "uncertain": uncertain,
+            "total": len(research_items),
+        }
+
     return {
         "status": "ok",
 
@@ -2433,6 +2513,12 @@ def get_case(
             ),
 
             "status": case.status,
+
+            "evidence_strength": evidence_strength,
+
+            "confidence": confidence,
+
+            "stance": stance,
 
             "created_at": (
                 case.created_at

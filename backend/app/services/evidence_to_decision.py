@@ -14,6 +14,89 @@ from app.services.case_decision import decide_case
 from app.services.case_planning import build_case_plan
 
 
+def _compute_evidence_strength(
+    items: List[CaseResearch],
+) -> str:
+    if not items:
+        return "insufficient"
+
+    high = sum(
+        1
+        for item in items
+        if (item.relevance or "").lower() == "high"
+    )
+
+    if high >= 2:
+        return "strong"
+
+    if high >= 1 or len(items) >= 3:
+        return "moderate"
+
+    return "insufficient"
+
+
+def _compute_confidence(
+    items: List[CaseResearch],
+) -> int:
+    if not items:
+        return 0
+
+    score = 50
+
+    high = sum(
+        1
+        for item in items
+        if (item.relevance or "").lower() == "high"
+    )
+
+    score += min(high * 10, 30)
+
+    authoritative = sum(
+        1
+        for item in items
+        if item.url and ".gov" in item.url.lower()
+    )
+
+    score += min(authoritative * 5, 10)
+
+    if len(items) >= 5:
+        score += 5
+    elif len(items) >= 3:
+        score += 3
+
+    return max(0, min(100, score))
+
+
+def _classify_evidence_stance(
+    items: List[CaseResearch],
+) -> dict:
+    supporting = 0
+    conflicting = 0
+    uncertain = 0
+
+    for item in items:
+        url = (item.url or "").lower()
+        source = (item.source or "").lower()
+        relevance = (item.relevance or "").lower()
+
+        if relevance == "high":
+            if ".gov" in url or "official" in source:
+                supporting += 1
+            else:
+                uncertain += 1
+        elif relevance == "medium":
+            uncertain += 1
+        else:
+            uncertain += 1
+
+    return {
+        "supporting": supporting,
+        "conflicting": conflicting,
+        "uncertain": uncertain,
+        "total": len(items),
+    }
+
+
 def synthesize_evidence_and_plan(
     db: Session,
     case: CaseModel,
@@ -95,22 +178,34 @@ def synthesize_evidence_and_plan(
 
     if case.supporting_facts:
         try:
+
             loaded = json.loads(
                 case.supporting_facts
             )
 
-            if isinstance(loaded, list):
+            if isinstance(
+                loaded,
+                list,
+            ):
                 supporting_facts = loaded
 
-            elif isinstance(loaded, str):
-                supporting_facts = [loaded]
+            elif isinstance(
+                loaded,
+                str,
+            ):
+                supporting_facts = [
+                    loaded
+                ]
 
         except (
             TypeError,
             json.JSONDecodeError,
         ):
+
             supporting_facts = [
-                str(case.supporting_facts)
+                str(
+                    case.supporting_facts
+                )
             ]
 
     parsed = ParsedCase(
@@ -273,6 +368,13 @@ def synthesize_evidence_and_plan(
         ),
     )
 
+    evidence_strength = (
+        _compute_evidence_strength(items)
+    )
+
+    confidence = _compute_confidence(items)
+    stance = _classify_evidence_stance(items)
+
     return {
         "issue": case.issue,
         "recommended_action": (
@@ -289,4 +391,7 @@ def synthesize_evidence_and_plan(
         "approval_required": True,
         "status": case.status,
         "evidence": evidence_refs,
+        "evidence_strength": evidence_strength,
+        "confidence": confidence,
+        "stance": stance,
     }
