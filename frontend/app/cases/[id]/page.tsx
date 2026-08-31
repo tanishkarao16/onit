@@ -203,31 +203,41 @@ function formatAmount(
     return null;
   }
 
-  const rawCurrency = String(currency ?? "").trim();
+  const rawCurrency = String(currency ?? "").trim().toUpperCase();
 
-  if (!rawCurrency) {
-    return rawAmount;
+  const numericValue = rawAmount.replace(/[^\d.]/g, "");
+
+  const formattedNumber = new Intl.NumberFormat(
+    "en-US",
+  ).format(Number(numericValue));
+
+  const currencySymbols: Record<string, string> = {
+    USD: "$",
+    EUR: "€",
+    GBP: "£",
+    JPY: "¥",
+    AUD: "A$",
+    CAD: "C$",
+    CHF: "Fr",
+    CNY: "¥",
+    HKD: "HK$",
+    NZD: "NZ$",
+    SGD: "S$",
+    KRW: "₩",
+    INR: "₹",
+    MXN: "MX$",
+    BRL: "R$",
+  };
+
+  const symbol =
+    currencySymbols[rawCurrency] ||
+    rawCurrency;
+
+  if (rawCurrency === "JPY" || rawCurrency === "KRW") {
+    return `${symbol}${formattedNumber}`;
   }
 
-  const alreadyContainsCurrency =
-    rawAmount
-      .toLowerCase()
-      .startsWith(rawCurrency.toLowerCase());
-
-  if (alreadyContainsCurrency) {
-    return rawAmount;
-  }
-
-  const currencyAtEnd =
-    rawAmount
-      .toLowerCase()
-      .endsWith(rawCurrency.toLowerCase());
-
-  if (currencyAtEnd) {
-    return rawAmount;
-  }
-
-  return `${rawCurrency}${rawAmount}`;
+  return `${symbol}${formattedNumber}`;
 }
 
 function formatUnknownValue(
@@ -308,6 +318,35 @@ function getRelevanceLabel(
   }
 
   return formatStatus(relevance);
+}
+
+function parsePlanSteps(
+  planSteps?: string | null,
+): string[] {
+  if (!planSteps) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(planSteps);
+
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter(
+          (step) =>
+            typeof step === "string" &&
+            step.trim() !== "",
+        )
+        .map((step) => step.trim());
+    }
+  } catch {
+    // Fall through to string splitting
+  }
+
+  return planSteps
+    .split("\n")
+    .map((step) => step.trim())
+    .filter((step) => step !== "");
 }
 
 function StatusPill({
@@ -439,16 +478,13 @@ function AssessmentRow({
 }
 
 function EvidenceStrength({
-  evidenceCount,
-  researchCount,
+  strength,
 }: {
-  evidenceCount: number;
-  researchCount: number;
+  strength: string | null | undefined;
 }) {
-  if (
-    evidenceCount > 0 &&
-    researchCount > 0
-  ) {
+  const normalized = (strength || "insufficient").toLowerCase();
+
+  if (normalized === "strong") {
     return (
       <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700">
         Strong
@@ -456,10 +492,7 @@ function EvidenceStrength({
     );
   }
 
-  if (
-    evidenceCount > 0 ||
-    researchCount > 0
-  ) {
+  if (normalized === "moderate") {
     return (
       <span className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700">
         Moderate
@@ -1348,11 +1381,7 @@ export default function CasePage() {
 
         {(canResearch ||
           canRequestApproval ||
-          canExecute ||
-          submitted ||
-          waitingForResponse ||
-          followUpRequired ||
-          escalationRequired) && (
+          canExecute) && (
           <section className="mt-8">
             <div className="rounded-2xl bg-[#171717] p-6 text-white shadow-[0_14px_50px_rgba(0,0,0,0.08)]">
               <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
@@ -1363,15 +1392,7 @@ export default function CasePage() {
                       ? "RESEARCH READY"
                       : canRequestApproval
                         ? "DECISION READY"
-                        : canExecute
-                          ? "ACTION READY"
-                          : submitted
-                            ? "ACTION SUBMITTED"
-                            : waitingForResponse
-                              ? "AWAITING RESPONSE"
-                              : followUpRequired
-                                ? "FOLLOW-UP REQUIRED"
-                                : "ESCALATION REQUIRED"}
+                        : "ACTION READY"}
                   </p>
 
                   <h2 className="mt-2 text-xl font-semibold">
@@ -1379,15 +1400,7 @@ export default function CasePage() {
                       ? "ONIT can investigate this case."
                       : canRequestApproval
                         ? "ONIT has prepared an action."
-                        : canExecute
-                          ? "The approved action is ready to execute."
-                          : submitted
-                            ? "Action submitted."
-                            : waitingForResponse
-                              ? "Waiting for a response."
-                              : followUpRequired
-                                ? "Follow-up required."
-                                : "This case requires escalation."}
+                        : "The approved action is ready to execute."}
                   </h2>
 
                   <p className="mt-2 max-w-xl text-sm leading-6 text-white/60">
@@ -1395,15 +1408,7 @@ export default function CasePage() {
                       ? "ONIT has enough case information to begin focused external research."
                       : canRequestApproval
                         ? "The recommendation and execution plan are ready for your review."
-                        : canExecute
-                          ? "Human approval has been recorded. ONIT can now submit the prepared action."
-                          : submitted
-                            ? "ONIT has submitted the approved action and is awaiting the external organization's response."
-                            : waitingForResponse
-                              ? "The action has been submitted and ONIT is now waiting for the external organization to respond."
-                              : followUpRequired
-                                ? "The external response requires further action. ONIT will send a follow-up to continue progressing this case."
-                                : "This case has been flagged for escalation and will require additional attention."}
+                        : "Human approval has been recorded. ONIT can now submit the prepared action."}
                   </p>
                 </div>
 
@@ -1643,13 +1648,13 @@ export default function CasePage() {
           </div>
         </section>
 
-        {/* EVIDENCE */}
+        {/* DOCUMENT EVIDENCE */}
 
         <section className="mt-12">
           <div className="flex items-end justify-between gap-4">
             <div>
               <SectionLabel>
-                EVIDENCE
+                DOCUMENT EVIDENCE
               </SectionLabel>
 
               <p className="mt-1 text-sm text-[#73736e]">
@@ -1711,13 +1716,13 @@ export default function CasePage() {
                   </p>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
+                 <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
                   <p className="text-sm font-medium">
-                    No evidence has been uploaded yet.
+                    No document evidence yet.
                   </p>
 
                   <p className="mt-2 text-sm leading-6 text-[#8a8a86]">
-                    Add a document and ONIT will extract the facts it can use.
+                    Add a document and Nutrient will extract structured facts ONIT can reason over.
                   </p>
                 </div>
               )
@@ -1820,7 +1825,7 @@ export default function CasePage() {
           </div>
         </section>
 
-        {/* ASSESSMENT */}
+        {/* DECISION */}
 
         {(caseItem.issue ||
           caseItem.recommended_action ||
@@ -1828,8 +1833,12 @@ export default function CasePage() {
           caseItem.decision_reason) && (
           <section className="mt-12">
             <SectionLabel>
-              ONIT&apos;S ASSESSMENT
+              DECISION
             </SectionLabel>
+
+            <p className="mt-1 text-sm text-[#73736e]">
+              ONIT&apos;s recommendation, informed by case facts, document evidence, and live research.
+            </p>
 
             <div className="mt-4 overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
               {caseItem.issue && (
@@ -1905,14 +1914,14 @@ export default function CasePage() {
 
         <section className="mt-12">
           <SectionLabel>
-            EXTERNAL RESEARCH
+            LIVE RESEARCH
           </SectionLabel>
 
           <p className="mt-1 text-sm text-[#73736e]">
             {research.length >
             0
-              ? "Sources ONIT retrieved to validate the case and support its decision."
-              : "Sources ONIT used to validate the case and support its decision."}
+              ? "Sources ONIT retrieved through SerpApi to validate the case and support its decision."
+              : "Sources ONIT will retrieve through SerpApi to validate the case and support its decision."}
           </p>
 
           {research.length ===
@@ -1947,7 +1956,11 @@ export default function CasePage() {
                     >
                       <div className="flex flex-col justify-between gap-4 sm:flex-row">
                         <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
+                       <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-[#171717] px-3 py-1 text-xs font-medium text-white">
+                              Live research
+                            </span>
+
                             <span className="rounded-full bg-[#f7f7f5] px-3 py-1 text-xs font-medium text-[#73736e]">
                               {item.source ??
                                 "External source"}
@@ -2243,11 +2256,8 @@ export default function CasePage() {
 
                     <div className="mt-2">
                       <EvidenceStrength
-                        evidenceCount={
-                          evidence.length
-                        }
-                        researchCount={
-                          research.length
+                        strength={
+                          caseItem.evidence_strength
                         }
                       />
                     </div>
@@ -2307,10 +2317,36 @@ export default function CasePage() {
               )}
 
               {caseItem.plan_steps && (
-                <div className="mt-5 whitespace-pre-line rounded-xl bg-[#f7f7f5] p-5 text-sm leading-7 text-[#454542]">
-                  {
-                    caseItem.plan_steps
-                  }
+                <div className="mt-6 space-y-3">
+                  {parsePlanSteps(
+                    caseItem.plan_steps,
+                  ).map(
+                    (
+                      step,
+                      index,
+                    ) => (
+                      <div
+                        key={
+                          index
+                        }
+                        className="flex gap-4 rounded-xl bg-[#f7f7f5] p-4"
+                      >
+                        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#171717] text-xs font-semibold text-white">
+                          {String(
+                            index +
+                              1
+                          ).padStart(
+                            2,
+                            "0",
+                          )}
+                        </span>
+
+                        <p className="text-sm leading-7 text-[#454542]">
+                          {step}
+                        </p>
+                      </div>
+                    ),
+                  )}
                 </div>
               )}
             </div>
@@ -2390,11 +2426,44 @@ export default function CasePage() {
                           Execution plan
                         </p>
 
-                        <p className="mt-1 whitespace-pre-line text-sm leading-6 text-[#454542]">
-                          {caseItem.plan_steps ??
-                            caseItem.plan_summary ??
-                            "No execution plan provided."}
-                        </p>
+                        {caseItem.plan_steps ? (
+                          <div className="mt-3 space-y-2">
+                            {parsePlanSteps(
+                              caseItem.plan_steps,
+                            ).map(
+                              (
+                                step,
+                                index,
+                              ) => (
+                                <div
+                                  key={
+                                    index
+                                  }
+                                  className="flex gap-3"
+                                >
+                                  <span className="mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#171717] text-[10px] font-semibold text-white">
+                                    {String(
+                                      index +
+                                        1
+                                    ).padStart(
+                                      2,
+                                      "0",
+                                    )}
+                                  </span>
+
+                                  <p className="text-sm leading-6 text-[#454542]">
+                                    {step}
+                                  </p>
+                                </div>
+                              ),
+                            )}
+                          </div>
+                        ) : (
+                          <p className="mt-1 whitespace-pre-line text-sm leading-6 text-[#454542]">
+                            {caseItem.plan_summary ??
+                              "No execution plan provided."}
+                          </p>
+                        )}
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-3">
@@ -2438,11 +2507,8 @@ export default function CasePage() {
 
                           <div className="mt-2">
                             <EvidenceStrength
-                              evidenceCount={
-                                evidence.length
-                              }
-                              researchCount={
-                                research.length
+                              strength={
+                                caseItem.evidence_strength
                               }
                             />
                           </div>
@@ -2585,18 +2651,26 @@ export default function CasePage() {
           </SectionLabel>
 
           <p className="mt-1 text-sm text-[#73736e]">
-            Responses received from the external organization.
+            {(waitingForResponse || followUpRequired)
+              ? "Awaiting a response from the external organization."
+              : resolved
+                ? "Responses received from the external organization."
+                : "Responses received from the external organization."}
           </p>
 
           {responses.length ===
           0 ? (
             <div className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
               <p className="text-sm font-medium">
-                No responses recorded yet.
+                {(waitingForResponse || followUpRequired)
+                  ? "Waiting for the external organization to respond."
+                  : "No responses recorded yet."}
               </p>
 
               <p className="mt-2 text-sm leading-6 text-[#8a8a86]">
-                Responses will appear here once the external organization replies.
+                {(waitingForResponse || followUpRequired)
+                  ? "ONIT is tracking the response and will update the case when it arrives."
+                  : "Responses will appear here once the external organization replies."}
               </p>
             </div>
           ) : (
@@ -2619,8 +2693,8 @@ export default function CasePage() {
 
                         <p className="mt-1 text-xs text-[#8a8a86]">
                           {item.resolved
-                            ? "Resolved"
-                            : "Follow-up required"}
+                            ? "Resolved this case"
+                            : "Requires follow-up"}
                         </p>
                       </div>
 
@@ -2647,12 +2721,22 @@ export default function CasePage() {
           followUpRequired) && (
           <section className="mt-12">
             <SectionLabel>
-              RECORD RESPONSE
+              SIMULATE RESPONSE
             </SectionLabel>
 
-            <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-6">
-              <p className="text-sm font-medium">
-                Simulate an external response for development and testing.
+            <div className="mt-4 rounded-2xl border border-dashed border-black/15 bg-white p-6">
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-zinc-600">
+                  Simulation
+                </span>
+
+                <p className="text-sm text-[#8a8a86]">
+                  Development and testing only
+                </p>
+              </div>
+
+              <p className="mt-3 text-sm font-medium">
+                Simulate an external response to test the case lifecycle.
               </p>
 
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
