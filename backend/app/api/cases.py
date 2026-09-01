@@ -56,58 +56,18 @@ from app.services.case_research import (
     research_case,
 )
 
-from app.services.evidence_to_decision import (
-    synthesize_evidence_and_plan,
-)
-
 from app.services.case_activity import (
     record_activity,
+)
+ 
+from app.services.evidence_to_decision import (
+    synthesize_evidence_and_plan,
 )
 
 from app.services.case_execution import (
     execute_case,
 )
-
-
-# ============================================================
-# DATABASE INITIALIZATION
-# ============================================================
-
-Base.metadata.create_all(bind=engine)
-
-
-# ============================================================
-# BACKWARD COMPATIBILITY
-#
-# Ensure case_research.url exists for older SQLite databases.
-# ============================================================
-
-with engine.connect() as conn:
-
-    try:
-
-        result = conn.exec_driver_sql(
-            "PRAGMA table_info(case_research)"
-        ).fetchall()
-
-        columns = {
-            row[1]
-            for row in result
-        }
-
-        if "url" not in columns:
-
-            conn.exec_driver_sql(
-                "ALTER TABLE case_research "
-                "ADD COLUMN url VARCHAR(2048)"
-            )
-
-        conn.commit()
-
-    except Exception:
-        pass
-
-
+ 
 # ============================================================
 # ROUTER
 # ============================================================
@@ -2247,12 +2207,16 @@ def execute_case_endpoint(
 # RESPONSE
 # ============================================================
 
+class RecordResponseRequest(BaseModel):
+    response_type: str
+    message: str
+    resolved: bool = False
+
+
 @router.post("/{case_id}/response")
 def record_response_endpoint(
     case_id: int,
-    response_type: str,
-    message: str,
-    resolved: bool = False,
+    request: RecordResponseRequest,
     db: Session = Depends(get_db),
 ):
 
@@ -2271,9 +2235,9 @@ def record_response_endpoint(
         response = record_case_response(
             db=db,
             case=case,
-            response_type=response_type,
-            message=message,
-            resolved=resolved,
+            response_type=request.response_type,
+            message=request.message,
+            resolved=request.resolved,
         )
 
     except ValueError as exc:
@@ -2299,6 +2263,76 @@ def record_response_endpoint(
     }
 
 
+    # ========================================================
+    # 1. FIND CASE
+    # ========================================================
+
+    case = db.get(
+        Case,
+        case_id,
+    )
+
+    if case is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found.",
+        )
+
+    # ========================================================
+    # 2. RECORD RESPONSE
+    # ========================================================
+
+    try:
+
+        response = record_case_response(
+            db=db,
+            case=case,
+            response_type=request.response_type,
+            message=request.message,
+            resolved=request.resolved,
+        )
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    # ========================================================
+    # 3. REFRESH CASE
+    #
+    # record_case_response() is responsible for changing
+    # the case status when the response resolves the case.
+    # Refresh ensures the returned status is the persisted one.
+    # ========================================================
+
+    db.refresh(case)
+    db.refresh(response)
+
+    # ========================================================
+    # 4. RESPONSE
+    # ========================================================
+
+    return {
+        "status": "ok",
+
+        "response": {
+            "id": response.id,
+            "case_id": response.case_id,
+            "response_type": response.response_type,
+            "message": response.message,
+            "resolved": response.resolved,
+            "created_at": response.created_at,
+        },
+
+        "case": {
+            "id": case.id,
+            "status": case.status,
+        },
+    }
+    
 # ============================================================
 # FOLLOW-UP
 # ============================================================
@@ -2387,6 +2421,30 @@ def get_case(
         .all()
     )
 
+    evidence_items = (
+        db.query(CaseEvidence)
+        .filter(
+            CaseEvidence.case_id == case.id
+        )
+        .order_by(
+            CaseEvidence.created_at.asc(),
+            CaseEvidence.id.asc(),
+        )
+        .all()
+    )
+
+    activities = (
+        db.query(CaseActivity)
+        .filter(
+            CaseActivity.case_id == case.id
+        )
+        .order_by(
+            CaseActivity.created_at.asc(),
+            CaseActivity.id.asc(),
+        )
+        .all()
+    )
+
     evidence_strength = "insufficient"
     confidence = 0
     stance = {
@@ -2467,12 +2525,15 @@ def get_case(
             ),
 
             "airline": case.airline,
+            "flight_number": getattr(case, "flight_number", None),
 
             "cancellation_date": (
                 case.cancellation_date
             ),
 
             "amount": case.amount,
+            "amount_value": getattr(case, "amount_value", None),
+            "amount_currency": getattr(case, "amount_currency", None),
 
             "currency": case.currency,
 
@@ -2485,7 +2546,11 @@ def get_case(
             ),
 
             "supporting_facts": (
-                case.supporting_facts
+                (lambda v: (json.loads(v) if v else None))(
+                    case.supporting_facts
+                )
+                if isinstance(getattr(case, "supporting_facts", None), str)
+                else getattr(case, "supporting_facts", None)
             ),
 
             "issue": case.issue,
@@ -2505,7 +2570,11 @@ def get_case(
             ),
 
             "plan_steps": (
-                case.plan_steps
+                (lambda v: (json.loads(v) if v else None))(
+                    case.plan_steps
+                )
+                if isinstance(getattr(case, "plan_steps", None), str)
+                else getattr(case, "plan_steps", None)
             ),
 
             "approval_required": (
@@ -2528,6 +2597,50 @@ def get_case(
                 case.updated_at
             ),
         },
+
+        "evidence": [
+            {
+                "id": item.id,
+                "filename": item.filename,
+                "evidence_type": item.evidence_type,
+                "mimetype": item.mimetype,
+                "extraction_status": item.extraction_status,
+                "original_text": item.original_text,
+                "extracted_text": item.extracted_text,
+                "extracted_facts": (
+                    (lambda v: json.loads(v) if v else {})(
+                        item.extracted_facts
+                    )
+                    if isinstance(getattr(item, "extracted_facts", None), str)
+                    else getattr(item, "extracted_facts", None) or {}
+                ),
+                "created_at": item.created_at,
+            }
+            for item in evidence_items
+        ],
+
+        "research": [
+            {
+                "id": item.id,
+                "source": item.source,
+                "title": item.title,
+                "summary": item.summary,
+                "relevance": item.relevance,
+                "url": getattr(item, "url", None),
+                "created_at": item.created_at,
+            }
+            for item in research_items
+        ],
+
+        "activity": [
+            {
+                "id": activity.id,
+                "event_type": activity.event_type,
+                "message": activity.message,
+                "created_at": activity.created_at,
+            }
+            for activity in activities
+        ],
 
         "responses": [
             {
