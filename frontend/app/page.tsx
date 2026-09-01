@@ -15,8 +15,7 @@ type CaseItem = {
   updated_at?: string;
 };
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+import { API_URL } from "./lib/api";
 
 function StatusDot({ status }: { status: string }) {
   const priority =
@@ -320,7 +319,7 @@ export default function Home() {
 
           <div className="flex items-center gap-3">
             <div className="hidden text-right sm:block">
-              <p className="text-sm font-medium">Tanishka</p>
+              <p className="text-sm font-medium">Onit Workspace</p>
               <p className="text-xs text-[#8a8a86]">
                 Personal workspace
               </p>
