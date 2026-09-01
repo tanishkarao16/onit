@@ -983,58 +983,57 @@ export default function CasePage() {
      }
    }
 
-   async function recordResponse(
-     responseType: string,
-     message: string,
-     resolved: boolean,
-   ) {
-     if (!caseItem) {
-       return;
-     }
+async function recordResponse(
+  responseType: string,
+  message: string,
+  resolved: boolean,
+) {
+  if (!caseItem) {
+    return;
+  }
 
-     try {
-       setRecordResponseLoading(true);
-       setError("");
+  try {
+    setRecordResponseLoading(true);
+    setError("");
 
-       const response = await fetch(
-         `${API_URL}/cases/${caseItem.id}/response`,
-         {
-           method: "POST",
-           headers: {
-             "Content-Type":
-               "application/json",
-           },
-           body: JSON.stringify({
-             response_type: responseType,
-             message,
-             resolved,
-           }),
-         },
-       );
+    const response = await fetch(
+      `${API_URL}/cases/${caseItem.id}/response`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          response_type: responseType,
+          message,
+          resolved,
+        }),
+      },
+    );
 
-       const data =
-         await response
-           .json()
-           .catch(() => ({}));
+    const data = await response
+      .json()
+      .catch(() => ({}));
 
-       if (!response.ok) {
-         throw new Error(
-           data?.detail ??
-             "Unable to record response.",
-         );
-       }
+    if (!response.ok) {
+      throw new Error(
+        data?.detail ??
+          "Unable to record response.",
+      );
+    }
 
-       await loadCase();
-     } catch (err) {
-       setError(
-         err instanceof Error
-           ? err.message
-           : "Unable to record response.",
-       );
-     } finally {
-       setRecordResponseLoading(false);
-     }
-   }
+    await loadCase();
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Unable to record response.",
+    );
+  } finally {
+    setRecordResponseLoading(false);
+  }
+}
+
 
    async function runResearch() {
     if (!caseItem) {
@@ -1198,24 +1197,27 @@ export default function CasePage() {
       "CLOSED";
 
 
-  const workflow = useMemo(() => {
-    const currentIndex =
-      WORKFLOW_STATUSES.indexOf(
-        normalizedStatus as WorkflowStatus,
-      );
+const workflow = useMemo(() => {
+  const currentIndex = WORKFLOW_STATUSES.indexOf(
+    normalizedStatus as WorkflowStatus,
+  );
 
-    return WORKFLOW_STATUSES.map(
-      (status, index) => ({
-        status,
-        index,
-        complete:
-          currentIndex >= 0 &&
-          index < currentIndex,
-        current:
-          status === normalizedStatus,
-      }),
-    );
-  }, [normalizedStatus]);
+  return WORKFLOW_STATUSES.map((status, index) => {
+    const isResolved =
+      normalizedStatus === "RESOLVED" ||
+      normalizedStatus === "CLOSED";
+
+    return {
+      status,
+      index,
+      complete:
+        isResolved ||
+        (currentIndex >= 0 && index < currentIndex),
+      current:
+        !isResolved && status === normalizedStatus,
+    };
+  });
+}, [normalizedStatus]);
 
   const displayAmount =
     formatAmount(
@@ -1295,7 +1297,7 @@ export default function CasePage() {
           <div className="flex items-center gap-3">
             <div className="hidden text-right sm:block">
               <p className="text-sm font-medium">
-                Tanishka
+                Onit Workspace
               </p>
 
               <p className="text-xs text-[#8a8a86]">
