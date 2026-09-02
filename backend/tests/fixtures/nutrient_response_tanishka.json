@@ -1,0 +1,58 @@
+{
+  "output": {
+    "elements": [
+      {
+        "role": "Text",
+        "text": "AIRLINE REFUND CASE"
+      },
+      {
+        "role": "Text",
+        "text": "Passenger: Tanishka Rao\nBooking reference: SKR8F2"
+      },
+      {
+        "role": "Text",
+        "text": "Airline: Sakura Airways"
+      },
+      {
+        "role": "Text",
+        "text": "Flight number: SK123"
+      },
+      {
+        "role": "Text",
+        "text": "Cancellation Date: September 1, 2026"
+      },
+      {
+        "role": "Text",
+        "text": "Amount paid: ¥52,800"
+      },
+      {
+        "role": "Text",
+        "text": "Requested resolution:\nI would like a full refund of the amount paid, including any applicable taxes and fees."
+      },
+      {
+        "role": "ListItem",
+        "text": "- The airline cancelled the flight before the scheduled departure date."
+      },
+      {
+        "role": "ListItem",
+        "text": "- The passenger did not request the cancellation."
+      },
+      {
+        "role": "ListItem",
+        "text": "- No refund has been received yet."
+      },
+      {
+        "role": "ListItem",
+        "text": "- The passenger contacted the airline regarding the refund."
+      },
+      {
+        "role": "ListItem",
+        "text": "- The original amount paid was ¥52,800."
+      },
+      {
+        "role": "ListItem",
+        "text": "- Refund received: No"
+      }
+    ]
+  }
+}

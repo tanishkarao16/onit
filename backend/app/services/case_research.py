@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import os
+import re
 from typing import List
 
 from sqlalchemy.orm import Session
@@ -18,79 +19,374 @@ class ResearchResult:
     url: str | None = None
 
 
+def _normalize(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _is_generic(value: str | None) -> bool:
+    if not value:
+        return True
+
+    normalized = value.strip().lower()
+
+    return normalized in {
+        "abc",
+        "test",
+        "example",
+        "unknown",
+        "n/a",
+        "na",
+        "null",
+        "none",
+    }
+
+
 def _build_queries(case: CaseModel) -> List[str]:
-    parts: List[str] = []
-    # Build queries using the most relevant case fields.
-    def is_generic(name: str) -> bool:
-        if not name:
-            return True
-        n = name.strip().lower()
-        generic = {"abc", "test", "example", "unknown", "n/a", "na", "null"}
-        return n in generic
-
-    tokens: List[str] = []
-
-    if case.title:
-        tokens.append(case.title)
-    if case.description:
-        tokens.append(case.description)
-    if case.airline and not is_generic(case.airline):
-        tokens.append(case.airline)
-    if case.organization and not is_generic(case.organization) and case.organization != case.airline:
-        tokens.append(case.organization)
-    if case.requested_resolution:
-        tokens.append(case.requested_resolution)
-    if case.cancellation_date:
-        tokens.append(case.cancellation_date)
-    if case.booking_reference:
-        tokens.append(case.booking_reference)
-    if case.supporting_facts:
-        tokens.append(case.supporting_facts)
-
     queries: List[str] = []
 
-    # Prefer airline-focused authoritative queries
     airline = case.airline or case.organization
-    airline_lower = (airline or "").lower()
-    if airline and not is_generic(airline):
-        queries.append(f"{airline} cancelled flight refund policy")
-        queries.append(f"{airline} refund policy passenger rights")
-        queries.append(f"{airline} passenger refund rights site:gov")
 
-    # Consumer protection / aviation authority queries
-    if case.booking_reference or case.requested_resolution or case.cancellation_date:
-        qbase = " ".join(t for t in [case.title, case.description, case.requested_resolution] if t)
-        if qbase:
-            queries.append(f"{qbase} refund policy")
-            queries.append(f"{qbase} passenger rights site:gov")
+    # ---------------------------------------------------------
+    # 1. Exact organization / airline queries
+    # ---------------------------------------------------------
+    if airline and not _is_generic(airline):
+        queries.extend(
+            [
+                f'"{airline}" cancelled flight refund policy',
+                f'"{airline}" flight cancellation refund',
+                f'"{airline}" passenger refund rights',
+                f'"{airline}" cancelled flight refund site:gov',
+                f'"{airline}" cancelled flight refund site:go.jp',
+            ]
+        )
 
-    # Generic fallback using tokens
-    token_base = " ".join([t for t in tokens if t])
-    if token_base:
-        queries.append(f"{token_base} refund policy")
-        queries.append(f"{token_base} passenger rights")
+    # ---------------------------------------------------------
+    # 2. Government / regulator queries
+    # ---------------------------------------------------------
+    queries.extend(
+        [
+            "airline cancelled flight passenger refund rights site:gov",
+            "airline cancellation refund passenger rights site:go.jp",
+            "Japan airline cancelled flight refund consumer protection",
+            "Japan aviation passenger refund cancelled flight",
+            "airline cancellation passenger rights government",
+        ]
+    )
 
-    # final fallback
+    # ---------------------------------------------------------
+    # 3. Case-specific queries
+    # ---------------------------------------------------------
+    qbase_parts = []
+
+    if case.title:
+        qbase_parts.append(case.title)
+
+    if case.description:
+        qbase_parts.append(case.description)
+
+    if case.requested_resolution:
+        qbase_parts.append(case.requested_resolution)
+
+    qbase = " ".join(qbase_parts).strip()
+
+    if qbase:
+        queries.extend(
+            [
+                f"{qbase} refund policy",
+                f"{qbase} passenger rights",
+                f"{qbase} refund passenger rights site:gov",
+            ]
+        )
+
+    # ---------------------------------------------------------
+    # 4. Generic fallback
+    # ---------------------------------------------------------
     if not queries:
-        queries.append("flight cancellation refund policy")
+        queries.append("flight cancellation refund passenger rights")
 
+    # ---------------------------------------------------------
     # Deduplicate while preserving order
+    # ---------------------------------------------------------
     seen = set()
-    out: List[str] = []
-    for q in queries:
-        qn = q.strip()
-        if qn and qn not in seen:
-            seen.add(qn)
-            out.append(qn)
+    output = []
 
-    # Limit to reasonable count
-    return out[:10]
+    for query in queries:
+        query = query.strip()
+
+        if not query:
+            continue
+
+        normalized = query.lower()
+
+        if normalized in seen:
+            continue
+
+        seen.add(normalized)
+        output.append(query)
+
+    return output[:12]
+
+
+def _authority_score(
+    result: ResearchResult,
+    case: CaseModel,
+) -> int:
+    """
+    Rank research sources by authority and relevance.
+
+    Priority:
+        1. Government / regulators
+        2. Official organization / airline
+        3. Aviation / consumer authorities
+        4. Reputable secondary sources
+        5. Generic/community sources
+
+    This is a ranking heuristic, NOT a legal determination.
+    """
+
+    score = 0
+
+    link = (result.url or "").lower()
+    source = (result.source or "").lower()
+    title = (result.title or "").lower()
+    summary = (result.summary or "").lower()
+
+    searchable = " ".join(
+        [
+            link,
+            source,
+            title,
+            summary,
+        ]
+    )
+
+    airline = case.airline or case.organization
+
+    airline_normalized = _normalize(airline)
+    link_normalized = _normalize(link)
+    source_normalized = _normalize(source)
+
+    # ---------------------------------------------------------
+    # Government / regulatory authority
+    # ---------------------------------------------------------
+    government_domains = (
+        ".gov",
+        ".gov.",
+        "go.jp",
+        "gov.uk",
+        "europa.eu",
+        "mlit.go.jp",
+        "caa.go.jp",
+        "transportation.gov",
+        "transport.gov",
+        "dot.gov",
+    )
+
+    if any(domain in link for domain in government_domains):
+        score += 70
+
+    # Government / regulator language
+    government_keywords = (
+        "government",
+        "government agency",
+        "regulator",
+        "regulatory authority",
+        "civil aviation authority",
+        "aviation authority",
+        "ministry of transport",
+        "transport ministry",
+        "department of transportation",
+        "transportation department",
+        "consumer protection",
+        "consumer affairs",
+        "consumer affairs agency",
+        "passenger rights",
+    )
+
+    if any(keyword in searchable for keyword in government_keywords):
+        score += 30
+
+    # ---------------------------------------------------------
+    # Japan-specific official authority
+    # ---------------------------------------------------------
+    japan_authority_keywords = (
+        "mlit",
+        "ministry of land infrastructure transport and tourism",
+        "consumer affairs agency",
+        "japan civil aviation",
+        "civil aviation bureau",
+        "caa japan",
+    )
+
+    if any(keyword in searchable for keyword in japan_authority_keywords):
+        score += 25
+
+    # ---------------------------------------------------------
+    # Official airline / organization
+    # ---------------------------------------------------------
+    if airline_normalized:
+        if airline_normalized in link_normalized:
+            score += 50
+
+        if airline_normalized in source_normalized:
+            score += 35
+
+        # Handle names separated by spaces / punctuation
+        airline_words = [
+            word
+            for word in re.findall(r"[a-z0-9]+", airline.lower())
+            if len(word) >= 3
+        ]
+
+        if airline_words:
+            matched_words = sum(
+                1
+                for word in airline_words
+                if word in searchable
+            )
+
+            if matched_words >= 2:
+                score += 15
+
+    # ---------------------------------------------------------
+    # Aviation authoritative organizations
+    # ---------------------------------------------------------
+    authoritative_orgs = (
+        "iata",
+        "icao",
+        "civil aviation",
+        "aviation authority",
+        "transport authority",
+        "consumer protection",
+        "consumer affairs",
+        "regulator",
+    )
+
+    if any(keyword in searchable for keyword in authoritative_orgs):
+        score += 25
+
+    # ---------------------------------------------------------
+    # Reputable secondary sources
+    # ---------------------------------------------------------
+    secondary_sources = (
+        "reuters",
+        "associated press",
+        "ap news",
+        "bbc",
+        "bloomberg",
+        "new york times",
+        "nytimes",
+        "guardian",
+        "cnn",
+        "nhk",
+    )
+
+    if any(source_name in searchable for source_name in secondary_sources):
+        score += 15
+
+    # ---------------------------------------------------------
+    # URL quality
+    # ---------------------------------------------------------
+    if result.url:
+        score += 5
+
+    # ---------------------------------------------------------
+    # Existing relevance classification
+    # ---------------------------------------------------------
+    relevance = (result.relevance or "").lower()
+
+    if relevance == "high":
+        score += 15
+    elif relevance == "medium":
+        score += 5
+
+    # ---------------------------------------------------------
+    # Case-specific identifiers
+    # ---------------------------------------------------------
+    identifiers = [
+        case.booking_reference,
+        case.flight_number,
+        case.cancellation_date,
+    ]
+
+    for identifier in identifiers:
+        if not identifier:
+            continue
+
+        identifier_normalized = identifier.lower().strip()
+
+        if (
+            identifier_normalized in searchable
+            and len(identifier_normalized) >= 3
+        ):
+            score += 8
+
+    # ---------------------------------------------------------
+    # Requested outcome relevance
+    # ---------------------------------------------------------
+    requested_resolution = (
+        case.requested_resolution or ""
+    ).lower()
+
+    if requested_resolution:
+        resolution_words = [
+            word
+            for word in re.findall(
+                r"[a-z0-9]+",
+                requested_resolution,
+            )
+            if len(word) >= 4
+        ]
+
+        matched_resolution_words = sum(
+            1
+            for word in resolution_words
+            if word in searchable
+        )
+
+        score += min(
+            matched_resolution_words * 2,
+            10,
+        )
+
+    # ---------------------------------------------------------
+    # Penalize low-authority community/social sources
+    # ---------------------------------------------------------
+    low_authority_domains = (
+        "facebook.com",
+        "reddit.com",
+        "quora.com",
+        "pinterest.com",
+        "tiktok.com",
+        "instagram.com",
+        "youtube.com",
+    )
+
+    if any(domain in link for domain in low_authority_domains):
+        score -= 40
+
+    low_authority_sources = (
+        "facebook",
+        "reddit",
+        "quora",
+        "forum",
+        "community",
+        "blogspot",
+    )
+
+    if any(source_name in source for source_name in low_authority_sources):
+        score -= 20
+
+    return score
 
 
 def research_case(
     db: Session,
     case: CaseModel,
 ) -> list[ResearchResult]:
+
     api_key = os.getenv("SERPAPI_API_KEY")
 
     if not api_key:
@@ -107,41 +403,145 @@ def research_case(
     )
 
     queries = _build_queries(case)
+
     airline = case.airline or case.organization
     airline_lower = (airline or "").lower()
 
     results: List[ResearchResult] = []
 
+    # ---------------------------------------------------------
+    # Search across multiple queries.
+    #
+    # Important:
+    # Do NOT stop after the first 5 raw results.
+    # We need a larger candidate pool so authority ranking
+    # can actually select the strongest sources.
+    # ---------------------------------------------------------
+    max_candidates = 30
+
     try:
-        for q in queries:
-            items = serpapi.search(q, api_key=api_key)
+        for query in queries:
+
+            items = serpapi.search(
+                query,
+                api_key=api_key,
+            )
 
             for item in items:
-                title = item.get("title") or item.get("headline") or ""
-                snippet = item.get("snippet") or item.get("summary") or ""
-                source = item.get("source") or item.get("engine") or "web"
-                link = item.get("link") or item.get("url")
 
-                # Heuristic relevance
+                title = (
+                    item.get("title")
+                    or item.get("headline")
+                    or ""
+                )
+
+                snippet = (
+                    item.get("snippet")
+                    or item.get("summary")
+                    or ""
+                )
+
+                source = (
+                    item.get("source")
+                    or item.get("engine")
+                    or "web"
+                )
+
+                link = (
+                    item.get("link")
+                    or item.get("url")
+                )
+
+                link_lower = (link or "").lower()
+                source_lower = (source or "").lower()
+
+                # -------------------------------------------------
+                # Initial relevance
+                # -------------------------------------------------
                 relevance = "medium"
-                lnk = (link or "").lower()
-                if lnk and any(k in lnk for k in [".gov", ".gov.", "gov."]):
-                    relevance = "high"
-                elif airline_lower and airline_lower in lnk:
+
+                if any(
+                    domain in link_lower
+                    for domain in (
+                        ".gov",
+                        ".gov.",
+                        "go.jp",
+                        "gov.uk",
+                        "europa.eu",
+                    )
+                ):
                     relevance = "high"
 
-                # Explain why the source matters
-                why = ""
-                if "gov" in (source or "") or (link and ".gov" in link):
-                    why = "This is an official government or regulator source describing passenger rights or guidance."
-                elif (airline_lower and airline_lower in (source or "")) or (link and airline_lower and airline_lower in (link or "")):
-                    why = "This source appears to be the airline's official policy or published guidance."
+                elif (
+                    airline_lower
+                    and _normalize(airline_lower)
+                    in _normalize(link_lower)
+                ):
+                    relevance = "high"
+
+                # -------------------------------------------------
+                # Explain source role
+                # -------------------------------------------------
+                if any(
+                    domain in link_lower
+                    for domain in (
+                        ".gov",
+                        ".gov.",
+                        "go.jp",
+                        "gov.uk",
+                        "europa.eu",
+                    )
+                ):
+                    why = (
+                        "This is an official government or "
+                        "regulatory source describing passenger "
+                        "rights or guidance."
+                    )
+
+                elif (
+                    airline_lower
+                    and _normalize(airline_lower)
+                    in _normalize(link_lower)
+                ):
+                    why = (
+                        "This source appears to be the airline's "
+                        "official policy or published guidance."
+                    )
+
+                elif any(
+                    keyword in (
+                        title.lower()
+                        + " "
+                        + source_lower
+                        + " "
+                        + snippet.lower()
+                    )
+                    for keyword in (
+                        "iata",
+                        "icao",
+                        "aviation authority",
+                        "consumer protection",
+                        "consumer affairs",
+                        "regulator",
+                    )
+                ):
+                    why = (
+                        "This source provides authoritative "
+                        "aviation or consumer-protection guidance."
+                    )
+
                 else:
-                    why = "This source provides news or guidance relevant to refunds and passenger rights."
+                    why = (
+                        "This source provides information relevant "
+                        "to the case and may provide supporting context."
+                    )
 
                 summary = (snippet or "").strip()
+
                 if summary:
-                    summary = f"{summary} — {why}"
+                    summary = (
+                        f"{summary} — {why}"
+                    )
                 else:
                     summary = why
 
@@ -155,71 +555,151 @@ def research_case(
                     )
                 )
 
-            # stop early if we've gathered a reasonable number
-            if len(results) >= 5:
+                if len(results) >= max_candidates:
+                    break
+
+            if len(results) >= max_candidates:
                 break
 
-        # deduplicate results list itself (same URL or same source+title across queries)
-        seen_urls_run = set()
-        seen_pairs_run = set()
-        unique_results = []
-        for r in results:
-            if r.url:
-                if r.url in seen_urls_run:
-                    continue
-                seen_urls_run.add(r.url)
-            else:
-                pair = (r.source or "", r.title or "")
-                if pair in seen_pairs_run:
-                    continue
-                seen_pairs_run.add(pair)
-            unique_results.append(r)
+        # ---------------------------------------------------------
+        # Deduplicate current research results
+        # ---------------------------------------------------------
+        seen_urls = set()
+        seen_pairs = set()
+        unique_results: List[ResearchResult] = []
 
-        # persist with idempotency: avoid inserting duplicates for same case
-        # gather existing persisted keys (url preferred, fallback to source+title)
+        for result in results:
+
+            if result.url:
+                normalized_url = result.url.strip().lower()
+
+                if normalized_url in seen_urls:
+                    continue
+
+                seen_urls.add(normalized_url)
+
+            else:
+                pair = (
+                    (result.source or "").strip().lower(),
+                    (result.title or "").strip().lower(),
+                )
+
+                if pair in seen_pairs:
+                    continue
+
+                seen_pairs.add(pair)
+
+            unique_results.append(result)
+
+        # ---------------------------------------------------------
+        # Rank candidates
+        # ---------------------------------------------------------
+        scored_results = [
+            (
+                result,
+                _authority_score(
+                    result,
+                    case,
+                ),
+            )
+            for result in unique_results
+        ]
+
+        # Python's sort is stable, so equal scores retain
+        # their original search order.
+        scored_results.sort(
+            key=lambda pair: pair[1],
+            reverse=True,
+        )
+
+        # Keep only the strongest five sources.
+        ranked_results = [
+            result
+            for result, score in scored_results[:5]
+        ]
+
+        # ---------------------------------------------------------
+        # Existing persisted research
+        # ---------------------------------------------------------
         existing = (
             db.query(CaseResearch)
-            .filter(CaseResearch.case_id == case.id)
+            .filter(
+                CaseResearch.case_id == case.id
+            )
             .all()
         )
 
         existing_urls = set()
         existing_pairs = set()
-        for e in existing:
-            if e.url:
-                existing_urls.add(e.url)
-            else:
-                existing_pairs.add((e.source or "", e.title or ""))
 
-        for idx, r in enumerate(unique_results):
-            # try to capture URL from the original serpapi result stored in local loop
-            # The serpapi.search returns dicts and we persisted link earlier in local items
-            # We didn't store link on ResearchResult to keep backward compatibility, so read from serpapi again is not ideal.
-            # Instead, attempt to read link from items by re-running a quick search for the title — but that's costly.
-            # To preserve simplicity, if the original item had 'link' it was assigned to ResearchResult via local scope: modify search call to include link by adding attribute to ResearchResult.
-            # dedupe: prefer URL when present
-            if r.url:
-                if r.url in existing_urls:
-                    continue
-                existing_urls.add(r.url)
+        for existing_result in existing:
+
+            if existing_result.url:
+                existing_urls.add(
+                    existing_result.url.strip().lower()
+                )
+
             else:
-                pair = (r.source or "", r.title or "")
+                existing_pairs.add(
+                    (
+                        (
+                            existing_result.source
+                            or ""
+                        ).strip().lower(),
+                        (
+                            existing_result.title
+                            or ""
+                        ).strip().lower(),
+                    )
+                )
+
+        # ---------------------------------------------------------
+        # Persist ranked results
+        # ---------------------------------------------------------
+        for result in ranked_results:
+
+            if result.url:
+
+                normalized_url = (
+                    result.url.strip().lower()
+                )
+
+                if normalized_url in existing_urls:
+                    continue
+
+                existing_urls.add(normalized_url)
+
+            else:
+
+                pair = (
+                    (
+                        result.source
+                        or ""
+                    ).strip().lower(),
+                    (
+                        result.title
+                        or ""
+                    ).strip().lower(),
+                )
+
                 if pair in existing_pairs:
                     continue
+
                 existing_pairs.add(pair)
 
             db.add(
                 CaseResearch(
                     case_id=case.id,
-                    source=r.source,
-                    title=r.title,
-                    summary=r.summary,
-                    relevance=r.relevance,
-                    url=(r.url),
+                    source=result.source,
+                    title=result.title,
+                    summary=result.summary,
+                    relevance=result.relevance,
+                    url=result.url,
                 )
             )
 
         case.status = CaseStatus.EVIDENCE_READY
+
         db.commit()
         db.refresh(case)
 
@@ -228,14 +708,16 @@ def research_case(
             case_id=case.id,
             event_type="RESEARCH_COMPLETED",
             message=(
-                f"ONIT completed research and found {len(unique_results)} relevant source(s)."
+                "ONIT completed research and selected "
+                f"{len(ranked_results)} highest-authority "
+                "source(s) from the research candidate pool."
             ),
         )
 
-        return unique_results
+        return ranked_results
 
     except Exception as exc:
-        # record failure and surface a ValueError for API layer handling
+
         record_activity(
             db=db,
             case_id=case.id,
@@ -243,8 +725,8 @@ def research_case(
             message=f"Research failed: {str(exc)}",
         )
 
-        # revert to evidence ready for safety
         case.status = CaseStatus.EVIDENCE_READY
+
         db.commit()
 
         raise ValueError(str(exc)) from exc

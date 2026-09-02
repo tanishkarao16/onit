@@ -15,6 +15,7 @@ class CaseStatus(str, Enum):
     CREATED = "CREATED"
     ANALYZING = "ANALYZING"
     EVIDENCE_READY = "EVIDENCE_READY"
+    NEEDS_INFORMATION = "NEEDS_INFORMATION"
     RESEARCHING = "RESEARCHING"
     PLANNING = "PLANNING"
     ACTION_READY = "ACTION_READY"
@@ -147,6 +148,15 @@ class Case(Base):
     )
 
     decision_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # --------------------------------------------------------
+    # MISSING INFORMATION (structured JSON)
+    # --------------------------------------------------------
+
+    missing_information: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
     )

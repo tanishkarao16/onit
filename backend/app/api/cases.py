@@ -59,6 +59,9 @@ from app.services.case_research import (
 from app.services.case_activity import (
     record_activity,
 )
+
+import json as _json
+
  
 from app.services.evidence_to_decision import (
     synthesize_evidence_and_plan,
@@ -1423,6 +1426,30 @@ async def add_case_evidence(
     db.refresh(evidence)
     db.refresh(case)
 
+    # Also apply the same missing_information clear logic used above for parse-and-create
+    try:
+        if case.missing_information:
+            import json as _json
+
+            miss = _json.loads(case.missing_information or "{}")
+
+            missing_fields = [m.get("field") for m in (miss.get("missing_information") or []) if isinstance(m, dict)]
+
+            still_missing = []
+            for f in missing_fields:
+                if not getattr(case, f, None):
+                    still_missing.append(f)
+
+            if not still_missing:
+                case.missing_information = None
+                case.status = CaseStatus.CREATED
+                db.commit()
+                db.refresh(case)
+    except Exception:
+        pass
+
+    # (duplicate cleanup removed — single cleanup already executed above)
+
     # ========================================================
     # ACTIVITY
     # ========================================================
@@ -2033,6 +2060,120 @@ def synthesize_case_endpoint(
         "stance": result.get(
             "stance"
         ),
+    }
+
+
+# ============================================================
+# END-TO-END PROCESS ORCHESTRATION
+# ============================================================
+
+
+@router.post("/{case_id}/process")
+def process_case_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+):
+
+    case = db.get(Case, case_id)
+
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type="PROCESS_STARTED",
+        message="ONIT started end-to-end case processing.",
+    )
+
+    # 1) Analyze (includes evidence sufficiency check)
+    try:
+        decision = analyze_case(db=db, case=case)
+    except Exception as exc:
+        # analyze_case already records failures; surface as 500
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    db.refresh(case)
+
+    # If analysis determined more information is required, stop here.
+    if case.status == CaseStatus.NEEDS_INFORMATION:
+
+        missing = None
+        try:
+            missing = _json.loads(case.missing_information or "{}")
+        except Exception:
+            missing = {"needs_information": True, "missing_information": []}
+
+        record_activity(
+            db=db,
+            case_id=case.id,
+            event_type="PROCESS_HALTED_NEEDS_INFORMATION",
+            message="ONIT halted processing because additional information is required.",
+        )
+
+        return {
+            "status": "ok",
+            "case": {
+                "id": case.id,
+                "status": case.status,
+                "missing_information": missing.get("missing_information") if isinstance(missing, dict) else [],
+            },
+        }
+
+    # 2) Research (question-driven). Only run if research hasn't already been done.
+    existing = (
+        db.query(CaseResearch)
+        .filter(CaseResearch.case_id == case.id)
+        .count()
+    )
+
+    if existing == 0:
+        try:
+            research_case(db=db, case=case)
+        except ValueError as exc:
+            # Research failed (e.g., missing API key or external error)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db.refresh(case)
+
+    # 3) Synthesize evidence into decision and plan
+    try:
+        result = synthesize_evidence_and_plan(db=db, case=case)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    record_activity(
+        db=db,
+        case_id=case.id,
+        event_type="PROCESS_COMPLETED",
+        message="ONIT completed end-to-end processing for the case.",
+    )
+
+    return {
+        "status": "ok",
+
+        "case": {
+            "id": case.id,
+            "status": case.status,
+            "issue": case.issue,
+            "recommended_action": case.recommended_action,
+            "priority": case.priority,
+        },
+
+        "decision": {
+            "issue": result.get("issue"),
+            "recommended_action": result.get("recommended_action"),
+            "priority": result.get("priority"),
+            "reason": result.get("decision_reason"),
+        },
+
+        "plan": {
+            "summary": result.get("plan_summary"),
+            "steps": result.get("plan_steps"),
+            "approval_required": result.get("approval_required"),
+        },
+
+        "evidence": result.get("evidence"),
     }
 
 

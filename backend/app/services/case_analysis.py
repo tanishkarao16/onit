@@ -9,6 +9,10 @@ from app.services.case_decision import (
     decide_case,
 )
 from app.services.case_parser import Case as ParsedCase
+from app.services.evidence_sufficiency import (
+    evaluate_evidence_sufficiency,
+    missing_to_json,
+)
 
 
 # ============================================================
@@ -149,6 +153,41 @@ def analyze_case(
         parsed_case.description = (
             case.description or ""
         )
+
+        # ====================================================
+        # EVIDENCE SUFFICIENCY
+        # ====================================================
+
+        suff = evaluate_evidence_sufficiency(parsed_case)
+
+        if suff.get("needs_information"):
+
+            # Persist structured missing information and set status
+            case.missing_information = missing_to_json(suff)
+            case.status = CaseStatus.NEEDS_INFORMATION
+            db.commit()
+            db.refresh(case)
+
+            record_activity(
+                db=db,
+                case_id=case.id,
+                event_type="NEEDS_INFORMATION",
+                message=(
+                    f"ONIT requires additional information: {suff.get('missing_information')}"
+                ),
+            )
+
+            # Return a lightweight decision indicating more info is needed
+            return CaseDecision(
+                issue="Needs more information",
+                recommended_action=(
+                    "Request the missing information from the user before continuing analysis."
+                ),
+                priority="low",
+                reason=(
+                    "ONIT cannot reliably decide without the required case identifiers or details."
+                ),
+            )
 
         # ====================================================
         # DECISION
