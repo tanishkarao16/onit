@@ -318,33 +318,105 @@ function getRelevanceLabel(
   return formatStatus(relevance);
 }
 
-function parsePlanSteps(
-  planSteps?: string | null,
-): string[] {
-  if (!planSteps) {
+function parsePlanSteps(planSteps: unknown): string[] {
+  if (planSteps == null) {
     return [];
   }
 
-  try {
-    const parsed = JSON.parse(planSteps);
-
-    if (Array.isArray(parsed)) {
-      return parsed
-        .filter(
-          (step) =>
-            typeof step === "string" &&
-            step.trim() !== "",
-        )
-        .map((step) => step.trim());
-    }
-  } catch {
-    // Fall through to string splitting
+  // Existing string format:
+  // "Step 1...\nStep 2...\nStep 3..."
+  if (typeof planSteps === "string") {
+    return planSteps
+      .split("\n")
+      .map((step) => step.trim())
+      .filter((step) => step.length > 0);
   }
 
-  return planSteps
-    .split("\n")
-    .map((step) => step.trim())
-    .filter((step) => step !== "");
+  // Array format:
+  // ["Step 1", "Step 2", "Step 3"]
+  if (Array.isArray(planSteps)) {
+    return planSteps
+      .map((step) => {
+        if (typeof step === "string") {
+          return step.trim();
+        }
+
+        if (step && typeof step === "object") {
+          const item = step as Record<string, unknown>;
+
+          return String(
+            item.description ??
+              item.title ??
+              item.action ??
+              item.step ??
+              item.text ??
+              ""
+          ).trim();
+        }
+
+        return "";
+      })
+      .filter((step) => step.length > 0);
+  }
+
+  // Structured object format:
+  // {
+  //   steps: [...]
+  // }
+  if (typeof planSteps === "object") {
+    const plan = planSteps as Record<string, unknown>;
+
+    const nestedSteps =
+      plan.steps ??
+      plan.plan_steps ??
+      plan.actions ??
+      plan.items;
+
+    if (Array.isArray(nestedSteps)) {
+      return nestedSteps
+        .map((step) => {
+          if (typeof step === "string") {
+            return step.trim();
+          }
+
+          if (step && typeof step === "object") {
+            const item = step as Record<string, unknown>;
+
+            return String(
+              item.description ??
+                item.title ??
+                item.action ??
+                item.step ??
+                item.text ??
+                ""
+            ).trim();
+          }
+
+          return "";
+        })
+        .filter((step) => step.length > 0);
+    }
+
+    if (typeof nestedSteps === "string") {
+      return nestedSteps
+        .split("\n")
+        .map((step) => step.trim())
+        .filter((step) => step.length > 0);
+    }
+
+    // Last-resort handling for a structured object.
+    const fallback = String(
+      plan.description ??
+        plan.title ??
+        plan.action ??
+        plan.text ??
+        ""
+    ).trim();
+
+    return fallback ? [fallback] : [];
+  }
+
+  return [];
 }
 
 function StatusPill({
