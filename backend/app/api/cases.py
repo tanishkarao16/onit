@@ -9,7 +9,10 @@ from fastapi import (
     HTTPException,
     UploadFile,
     Request,
+    BackgroundTasks,
 )
+
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -987,6 +990,7 @@ async def parse_and_create_case(
 async def add_case_evidence(
     case_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
@@ -1253,6 +1257,20 @@ async def add_case_evidence(
         ),
     }
 
+    # Determine whether extraction produced any useful facts
+    useful = any(
+        [
+            parsed_case.passenger,
+            parsed_case.booking_reference,
+            parsed_case.airline,
+            getattr(parsed_case, "flight_number", None),
+            parsed_case.cancellation_date,
+            parsed_case.amount,
+            getattr(parsed_case, "amount_value", None),
+            parsed_case.supporting_facts and len(parsed_case.supporting_facts) > 0,
+        ]
+    )
+
     # ========================================================
     # SAVE EVIDENCE
     # ========================================================
@@ -1264,7 +1282,7 @@ async def add_case_evidence(
         mimetype=mimetype,
         original_text=original_text,
         extracted_text=extracted_text,
-        extraction_status="COMPLETED",
+        extraction_status=("COMPLETED" if useful else "FAILED"),
         extracted_facts=json.dumps(
             facts,
             ensure_ascii=False,
@@ -1464,17 +1482,60 @@ async def add_case_evidence(
         ),
     )
 
-    record_activity(
-        db=db,
-        case_id=case.id,
-        event_type=(
-            "EVIDENCE_EXTRACTION_COMPLETED"
-        ),
-        message=(
-            f"ONIT extracted facts from "
-            f"{filename or 'text input'}."
-        ),
-    )
+    if useful:
+
+        record_activity(
+            db=db,
+            case_id=case.id,
+            event_type=(
+                "EVIDENCE_EXTRACTION_COMPLETED"
+            ),
+            message=(
+                f"ONIT extracted facts from "
+                f"{filename or 'text input'}."
+            ),
+        )
+
+        # schedule background processing to continue the pipeline once
+        def _background_process(case_id: int):
+            from app.db.database import SessionLocal as _SessionLocal
+
+            _db = _SessionLocal()
+            try:
+                try:
+                    from app.api.cases import process_case_endpoint as _process
+
+                    _process(case_id, db=_db)
+                except Exception as _exc:
+                    try:
+                        from app.services.case_activity import record_activity as _ra
+
+                        _ra(db=_db, case_id=case_id, event_type="PROCESS_FAILED", message=f"Automatic processing failed: {_exc}")
+                    except Exception:
+                        pass
+            finally:
+                _db.close()
+
+        try:
+            background_tasks.add_task(_background_process, case.id)
+        except Exception:
+            record_activity(db=db, case_id=case.id, event_type="PROCESS_SCHEDULE_FAILED", message="Failed to schedule automatic processing.")
+
+    else:
+
+        record_activity(
+            db=db,
+            case_id=case.id,
+            event_type=(
+                "EVIDENCE_EXTRACTION_FAILED"
+            ),
+            message=(
+                f"ONIT failed to extract useful facts from "
+                f"{filename or 'text input'}."
+            ),
+        )
+
+        return JSONResponse(status_code=400, content={"detail": "No useful facts extracted."})
 
     # ========================================================
     # RESPONSE
