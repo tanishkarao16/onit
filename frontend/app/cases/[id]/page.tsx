@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import {
+import React, {
   useCallback,
   useEffect,
   useMemo,
@@ -1312,11 +1312,7 @@ const workflow = useMemo(() => {
   });
 }, [normalizedStatus]);
 
-  const displayAmount =
-    formatAmount(
-      caseItem?.amount,
-      caseItem?.currency,
-    );
+  // displayAmount removed; amount formatting is handled dynamically in case info rendering
 
   if (loading) {
     return (
@@ -1671,75 +1667,133 @@ const workflow = useMemo(() => {
             CASE INFORMATION
           </SectionLabel>
 
-          <div className="mt-4 grid overflow-hidden rounded-2xl border border-black/[0.08] bg-white sm:grid-cols-2">
-            <InfoItem
-              label="Passenger"
-              value={
-                caseItem.passenger
-              }
-            />
+          <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-4">
+            {
+              // Build a dynamic list of facts from the case object.
+            }
+            {(() => {
+              if (!caseItem) return null;
 
-            <InfoItem
-              label="Organization"
-              value={
-                caseItem.organization ??
-                caseItem.airline
-              }
-            />
+              // Known keys to prioritize in display (but only shown if present)
+              const prioritized = [
+                ["passenger", "Passenger"],
+                ["organization", "Organization"],
+                ["airline", "Organization"],
+                ["booking_reference", "Booking reference"],
+                ["flight_number", "Flight number"],
+                ["amount", "Amount"],
+                ["cancellation_date", "Cancellation date"],
+                ["refund_received", "Refund received"],
+                ["requested_resolution", "Requested resolution"],
+                ["created_at", "Created"],
+              ];
 
-            <InfoItem
-              label="Booking reference"
-              value={
-                caseItem.booking_reference
-              }
-            />
+              const renderedKeys = new Set<string>();
 
-            <InfoItem
-              label="Amount"
-              value={
-                displayAmount
-              }
-            />
+              type Row = { key: string; label: string; value: string };
 
-            <InfoItem
-              label="Cancellation date"
-              value={
-                caseItem.cancellation_date
-              }
-            />
+              const rowsData: Row[] = [];
 
-            <InfoItem
-              label="Refund received"
-              value={
-                caseItem.refund_received ===
-                  null ||
-                caseItem.refund_received ===
-                  undefined
-                  ? null
-                  : typeof caseItem.refund_received ===
-                      "string"
-                    ? caseItem.refund_received
-                    : caseItem.refund_received
-                      ? "Yes"
-                      : "No"
-              }
-            />
+              const asRecord = caseItem as unknown as Record<string, unknown>;
 
-            <InfoItem
-              label="Requested resolution"
-              value={
-                caseItem.requested_resolution
-              }
-            />
+              const pushIfPresent = (key: string, label?: string) => {
+                const val = asRecord[key];
+                if (val === null || val === undefined || val === "") return;
 
-            <InfoItem
-              label="Created"
-              value={
-                formatDate(
-                  caseItem.created_at,
-                )
+                renderedKeys.add(key);
+
+                let display: string | null = null;
+
+                if (key === "amount") {
+                  display = formatAmount(caseItem.amount, caseItem.currency) || null;
+                } else if (key === "created_at" || key.toLowerCase().includes("date")) {
+                  display = formatDate(String(val)) || null;
+                } else if (typeof val === "boolean") {
+                  display = val ? "Yes" : "No";
+                } else if (Array.isArray(val)) {
+                  display = (val as unknown[]).map((v) => formatUnknownValue(v)).join("; ");
+                } else if (typeof val === "object") {
+                  display = formatUnknownValue(val as Record<string, unknown>);
+                } else {
+                  display = String(val);
+                }
+
+                if (display === null) return;
+
+                rowsData.push({ key, label: label ?? formatLabel(key), value: display });
+              };
+
+              // Render prioritized keys first
+              for (const [k, label] of prioritized) {
+                pushIfPresent(k, label);
               }
-            />
+
+              // supporting_facts may be a JSON string or plain text
+              if (caseItem.supporting_facts) {
+                try {
+                  const maybe = JSON.parse(caseItem.supporting_facts as string);
+
+                  if (Array.isArray(maybe) && maybe.length > 0) {
+                    renderedKeys.add("supporting_facts");
+                    rowsData.push({ key: "supporting_facts", label: "Supporting facts", value: (maybe as unknown[]).map((m) => formatUnknownValue(m)).join("; ") });
+                  } else if (typeof maybe === "string" && maybe.trim()) {
+                    renderedKeys.add("supporting_facts");
+                    rowsData.push({ key: "supporting_facts", label: "Supporting facts", value: maybe });
+                  }
+                } catch {
+                  // plain text
+                  if (String(caseItem.supporting_facts).trim()) {
+                    renderedKeys.add("supporting_facts");
+                    rowsData.push({ key: "supporting_facts", label: "Supporting facts", value: String(caseItem.supporting_facts) });
+                  }
+                }
+              }
+
+              // Render any remaining arbitrary keys from caseItem
+              for (const key of Object.keys(caseItem)) {
+                if (renderedKeys.has(key)) continue;
+
+                const val = asRecord[key];
+
+                if (val === null || val === undefined || val === "") continue;
+
+                // Skip internal/uninteresting fields
+                if (["id", "title", "description", "status", "updated_at"].includes(key)) continue;
+
+                if (key === "amount_value" || key === "amount_currency" || key === "currency") {
+                  // these are handled via amount display
+                  continue;
+                }
+
+                let display = "";
+
+                if (typeof val === "boolean") display = val ? "Yes" : "No";
+                else if (Array.isArray(val)) display = (val as unknown[]).map((v) => formatUnknownValue(v)).join("; ");
+                else if (typeof val === "object") display = formatUnknownValue(val as Record<string, unknown>);
+                else if (key.toLowerCase().includes("date")) display = formatDate(String(val));
+                else display = String(val);
+
+                rowsData.push({ key, label: formatLabel(key), value: display });
+              }
+              if (rowsData.length === 0) {
+                return (
+                  <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 p-8">
+                    <p className="text-sm font-medium">No structured facts available yet.</p>
+
+                    <p className="mt-2 text-sm leading-6 text-[#8a8a86]">Upload evidence and Nutrient will extract structured facts ONIT can reason over.</p>
+                  </div>
+                );
+              }
+
+              // Map normalized rows into JSX outside of try/catch and parsing logic
+              return (
+                <div className="grid gap-0 sm:grid-cols-2 overflow-hidden">
+                  {rowsData.map((r) => (
+                    <InfoItem key={r.key} label={r.label} value={r.value} />
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </section>
 
