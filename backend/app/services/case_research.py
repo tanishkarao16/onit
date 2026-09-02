@@ -40,7 +40,12 @@ def _is_generic(value: str | None) -> bool:
         "na",
         "null",
         "none",
+        "airways",
+        "airline",
+        "airlines",
+        "air",
     }
+
 
 
 def _build_queries(case: CaseModel) -> List[str]:
@@ -472,12 +477,30 @@ def research_case(
                 ):
                     relevance = "high"
 
-                elif (
-                    airline_lower
-                    and _normalize(airline_lower)
-                    in _normalize(link_lower)
-                ):
-                    relevance = "high"
+                else:
+                    # Prefer strong matches only when the airline appears
+                    # unambiguously in the link/title (e.g., airline domain)
+                    airline_words = [
+                        word
+                        for word in re.findall(r"[a-z0-9]+", (airline or "").lower())
+                        if len(word) >= 3
+                    ]
+
+                    combined_search_text = (
+                        link_lower + " " + title.lower() + " " + source_lower + " " + (snippet or "").lower()
+                    )
+
+                    matched_words = sum(
+                        1
+                        for word in airline_words
+                        if word in combined_search_text
+                    )
+
+                    # If the full normalized airline equals the normalized link, it's a strong match.
+                    if airline and _normalize(airline) and _normalize(airline) == _normalize(link_lower):
+                        relevance = "high"
+                    elif matched_words >= 2:
+                        relevance = "high"
 
                 # -------------------------------------------------
                 # Explain source role
@@ -498,10 +521,9 @@ def research_case(
                         "rights or guidance."
                     )
 
-                elif (
-                    airline_lower
-                    and _normalize(airline_lower)
-                    in _normalize(link_lower)
+                elif airline and _normalize(airline) and (
+                    _normalize(airline) == _normalize(link_lower)
+                    or matched_words >= 2
                 ):
                     why = (
                         "This source appears to be the airline's "

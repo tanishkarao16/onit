@@ -891,6 +891,29 @@ export default function CasePage() {
     };
   }, [loadCase]);
 
+  // Poll while research is in progress to avoid stale UI state.
+  useEffect(() => {
+    if (!caseId) return;
+
+    const currentStatus = normalizeStatus(caseItem?.status);
+
+    let controller: AbortController | null = null;
+    let intervalId: number | null = null;
+
+    if (currentStatus === "RESEARCHING") {
+      controller = new AbortController();
+      // poll every 3 seconds
+      intervalId = window.setInterval(() => {
+        void loadCase(controller!.signal);
+      }, 3000);
+    }
+
+    return () => {
+      if (controller) controller.abort();
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [caseId, caseItem, loadCase]);
+
   async function requestApproval() {
     if (!caseItem) {
       return;

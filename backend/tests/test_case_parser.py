@@ -69,6 +69,8 @@ def test_parse_tanishka_sample():
     assert case.flight_number == "SK123"
     assert case.cancellation_date == "September 1, 2026"
     assert case.amount is not None and "¥52,800" in case.amount
+    assert case.amount_value == "52800"
+    assert case.amount_currency == "JPY"
     assert case.refund_received is False
     assert case.requested_resolution is not None and "full refund" in case.requested_resolution.lower()
     assert isinstance(case.supporting_facts, list)

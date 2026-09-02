@@ -1359,12 +1359,25 @@ async def add_case_evidence(
 
     try_set(
         "amount",
+        parsed_case.amount,
+    )
+
+    try_set(
+        "amount_value",
         getattr(
             parsed_case,
             "amount_value",
             None,
-        )
-        or parsed_case.amount,
+        ),
+    )
+
+    try_set(
+        "amount_currency",
+        getattr(
+            parsed_case,
+            "amount_currency",
+            None,
+        ),
     )
 
     try_set(

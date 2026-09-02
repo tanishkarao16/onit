@@ -16,6 +16,8 @@ def test_persist_parsed_case():
             airline="Example Airways",
             cancellation_date="August 1, 2026",
             amount="Y120,000",
+            amount_value="120000",
+            amount_currency="JPY",
             refund_received=False,
             requested_resolution="Refund the full Y120,000",
             supporting_facts=["Booking reference: ABC123"],
@@ -29,6 +31,8 @@ def test_persist_parsed_case():
         assert case.airline == "Example Airways"
         assert case.organization == "Example Airways"
         assert case.amount == "Y120,000"
+        assert case.amount_value == "120000"
+        assert case.amount_currency == "JPY"
         assert case.refund_received is False
         assert case.requested_resolution == "Refund the full Y120,000"
 

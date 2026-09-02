@@ -27,6 +27,9 @@ def persist_parsed_case(
         airline=parsed_case.airline,
         cancellation_date=parsed_case.cancellation_date,
         amount=parsed_case.amount,
+        amount_value=parsed_case.amount_value,
+        amount_currency=parsed_case.amount_currency,
+        currency=parsed_case.amount_currency,
         refund_received=parsed_case.refund_received,
         requested_resolution=parsed_case.requested_resolution,
         supporting_facts=json.dumps(
