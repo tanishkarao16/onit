@@ -47,93 +47,252 @@ def _is_generic(value: str | None) -> bool:
     }
 
 
-
 def _build_queries(case: CaseModel) -> List[str]:
     queries: List[str] = []
 
-    # Domain detection using case fields and supporting facts
+    # ---------------------------------------------------------
+    # Build a searchable case context
+    # ---------------------------------------------------------
     text_parts = []
+
     if case.title:
         text_parts.append(case.title)
+
     if case.description:
         text_parts.append(case.description)
+
     if case.requested_resolution:
         text_parts.append(case.requested_resolution)
+
     if case.supporting_facts:
         text_parts.append(case.supporting_facts)
 
     text_blob = " ".join(text_parts).lower()
 
+    # ---------------------------------------------------------
+    # Detect case domain
+    # ---------------------------------------------------------
     def detect_domain() -> str | None:
-        if any(k in text_blob for k in ("insurance", "claim", "policy", "claimant", "policy number", "claim number")):
+        if any(
+            k in text_blob
+            for k in (
+                "insurance",
+                "claim",
+                "policy",
+                "claimant",
+                "policy number",
+                "claim number",
+            )
+        ):
             return "insurance"
-        if any(k in text_blob for k in ("flight", "airline", "passenger", "booking", "cancellation")):
+
+        if any(
+            k in text_blob
+            for k in (
+                "flight",
+                "airline",
+                "passenger",
+                "booking",
+                "cancellation",
+            )
+        ):
             return "flight"
-        if any(k in text_blob for k in ("bank", "transaction", "charge", "dispute", "account")):
+
+        if any(
+            k in text_blob
+            for k in (
+                "bank",
+                "transaction",
+                "charge",
+                "dispute",
+                "account",
+            )
+        ):
             return "bank"
-        if any(k in text_blob for k in ("rental", "lease", "deposit", "landlord", "tenancy")):
+
+        if any(
+            k in text_blob
+            for k in (
+                "rental",
+                "lease",
+                "deposit",
+                "landlord",
+                "tenancy",
+            )
+        ):
             return "rental"
+
         return None
 
     domain = detect_domain()
 
     org = case.airline or case.organization
 
-    # Build domain-specific queries
+    # ---------------------------------------------------------
+    # Known official domains.
+    #
+    # This is intentionally small and extensible.
+    # It does NOT make ONIT flight-specific.
+    # ---------------------------------------------------------
+    official_domains = {
+        "japan airlines": "jal.co.jp",
+        "jal": "jal.co.jp",
+    }
+
+    org_key = (org or "").strip().lower()
+    official_domain = official_domains.get(org_key)
+
+    # ---------------------------------------------------------
+    # Case-specific search base
+    # ---------------------------------------------------------
+    qbase = " ".join(
+        p
+        for p in (
+            case.title,
+            case.description,
+            case.requested_resolution,
+        )
+        if p
+    ).strip()
+
+    # ---------------------------------------------------------
+    # INSURANCE
+    # ---------------------------------------------------------
     if domain == "insurance":
+
         if org and not _is_generic(org):
-            queries.append(f'"{org}" insurance claim denial policy')
-            queries.append(f'"{org}" claim appeal process')
+            queries.extend(
+                [
+                    f'"{org}" insurance claim denial policy',
+                    f'"{org}" claim appeal process',
+                ]
+            )
 
-        queries.extend([
-            "insurance claim denial appeals guidance",
-            "insurance policy denial reasons consumer protection",
-            "how to appeal an insurance claim denial",
-            "insurance regulator claim denial guidance site:gov",
-        ])
+        queries.extend(
+            [
+                "insurance claim denial appeals guidance",
+                "insurance policy denial reasons consumer protection",
+                "how to appeal an insurance claim denial",
+                "insurance regulator claim denial guidance site:gov",
+            ]
+        )
 
-        qbase = " ".join([p for p in (case.title, case.description, case.requested_resolution) if p])
         if qbase:
-            queries.append(f"{qbase} insurance claim denial")
+            queries.append(
+                f"{qbase} insurance claim denial"
+            )
 
+    # ---------------------------------------------------------
+    # BANK
+    # ---------------------------------------------------------
     elif domain == "bank":
-        queries.extend([
-            "bank dispute chargeback process",
-            "consumer protection bank dispute",
-            "how to dispute a bank transaction",
-        ])
 
-        qbase = " ".join([p for p in (case.title, case.description, case.requested_resolution) if p])
-        if qbase:
-            queries.append(f"{qbase} bank dispute")
-
-    elif domain == "rental":
-        queries.extend([
-            "tenant deposit dispute guidance",
-            "rental tenancy deposit laws",
-        ])
-
-    else:
-        # Default to flight-oriented queries only when flight signals exist
         if org and not _is_generic(org):
-            queries.extend([
-                f'"{org}" cancelled flight refund policy',
-                f'"{org}" flight cancellation refund',
-                f'"{org}" passenger refund rights',
-            ])
+            queries.extend(
+                [
+                    f'"{org}" transaction dispute process',
+                    f'"{org}" charge dispute policy',
+                ]
+            )
 
-        # government/regulator fallbacks for consumer rights
-        queries.extend([
-            "consumer protection claim guidance site:gov",
-            "consumer affairs claim dispute guidance",
-        ])
+        queries.extend(
+            [
+                "bank dispute chargeback process",
+                "consumer protection bank dispute",
+                "how to dispute a bank transaction",
+            ]
+        )
 
-        qbase = " ".join([p for p in (case.title, case.description, case.requested_resolution) if p])
         if qbase:
-            queries.extend([
-                f"{qbase} policy guidance",
-                f"{qbase} consumer rights",
-            ])
+            queries.append(
+                f"{qbase} bank dispute"
+            )
+
+    # ---------------------------------------------------------
+    # RENTAL
+    # ---------------------------------------------------------
+    elif domain == "rental":
+
+        if org and not _is_generic(org):
+            queries.extend(
+                [
+                    f'"{org}" rental deposit policy',
+                    f'"{org}" tenancy dispute process',
+                ]
+            )
+
+        queries.extend(
+            [
+                "tenant deposit dispute guidance",
+                "rental tenancy deposit laws",
+            ]
+        )
+
+        if qbase:
+            queries.append(
+                f"{qbase} rental dispute guidance"
+            )
+
+    # ---------------------------------------------------------
+    # FLIGHT / GENERAL CASE
+    # ---------------------------------------------------------
+    else:
+
+        if org and not _is_generic(org):
+
+            # -----------------------------------------------
+            # Explicitly target known official domain.
+            # -----------------------------------------------
+            if official_domain:
+                queries.extend(
+                    [
+                        (
+                            f'site:{official_domain} '
+                            f'"{org}" flight cancellation refund'
+                        ),
+                        (
+                            f'site:{official_domain} '
+                            f'"{org}" cancelled flight refund'
+                        ),
+                        (
+                            f'site:{official_domain} '
+                            f'"{org}" involuntary cancellation refund'
+                        ),
+                        (
+                            f'site:{official_domain} '
+                            "international ticket refund cancellation"
+                        ),
+                    ]
+                )
+
+            # -----------------------------------------------
+            # Organization-aware fallback discovery.
+            # -----------------------------------------------
+            queries.extend(
+                [
+                    f'"{org}" cancelled flight refund policy',
+                    f'"{org}" flight cancellation refund',
+                    f'"{org}" passenger refund rights',
+                ]
+            )
+
+        # -----------------------------------------------------
+        # Government / regulator fallback
+        # -----------------------------------------------------
+        queries.extend(
+            [
+                "consumer protection claim guidance site:gov",
+                "consumer affairs claim dispute guidance",
+            ]
+        )
+
+        if qbase:
+            queries.extend(
+                [
+                    f"{qbase} policy guidance",
+                    f"{qbase} consumer rights",
+                ]
+            )
 
     # ---------------------------------------------------------
     # Deduplicate while preserving order
@@ -234,7 +393,10 @@ def _authority_score(
         "passenger rights",
     )
 
-    if any(keyword in searchable for keyword in government_keywords):
+    if any(
+        keyword in searchable
+        for keyword in government_keywords
+    ):
         score += 30
 
     # ---------------------------------------------------------
@@ -249,23 +411,60 @@ def _authority_score(
         "caa japan",
     )
 
-    if any(keyword in searchable for keyword in japan_authority_keywords):
+    if any(
+        keyword in searchable
+        for keyword in japan_authority_keywords
+    ):
         score += 25
 
     # ---------------------------------------------------------
     # Official airline / organization
     # ---------------------------------------------------------
     if airline_normalized:
+
+        # -----------------------------------------------
+        # Strong boost for verified official domain.
+        # -----------------------------------------------
+        official_domains = {
+            "japan airlines": "jal.co.jp",
+            "jal": "jal.co.jp",
+        }
+
+        airline_key = airline.strip().lower()
+        official_domain = official_domains.get(airline_key)
+
+        if official_domain:
+            # Extract hostname from URL.
+            link_host = re.sub(
+                r"^https?://",
+                "",
+                link,
+            ).split("/")[0]
+
+            if (
+                link_host == official_domain
+                or link_host.endswith(
+                    "." + official_domain
+                )
+            ):
+                score += 80
+
+        # -----------------------------------------------
+        # Existing organization matching
+        # -----------------------------------------------
         if airline_normalized in link_normalized:
             score += 50
 
         if airline_normalized in source_normalized:
             score += 35
 
-        # Handle names separated by spaces / punctuation
+        # Handle names separated by spaces / punctuation.
         airline_words = [
             word
-            for word in re.findall(r"[a-z0-9]+", airline.lower())
+            for word in re.findall(
+                r"[a-z0-9]+",
+                airline.lower(),
+            )
             if len(word) >= 3
         ]
 
@@ -293,7 +492,10 @@ def _authority_score(
         "regulator",
     )
 
-    if any(keyword in searchable for keyword in authoritative_orgs):
+    if any(
+        keyword in searchable
+        for keyword in authoritative_orgs
+    ):
         score += 25
 
     # ---------------------------------------------------------
@@ -312,7 +514,10 @@ def _authority_score(
         "nhk",
     )
 
-    if any(source_name in searchable for source_name in secondary_sources):
+    if any(
+        source_name in searchable
+        for source_name in secondary_sources
+    ):
         score += 15
 
     # ---------------------------------------------------------
@@ -324,7 +529,9 @@ def _authority_score(
     # ---------------------------------------------------------
     # Existing relevance classification
     # ---------------------------------------------------------
-    relevance = (result.relevance or "").lower()
+    relevance = (
+        result.relevance or ""
+    ).lower()
 
     if relevance == "high":
         score += 15
@@ -341,10 +548,13 @@ def _authority_score(
     ]
 
     for identifier in identifiers:
+
         if not identifier:
             continue
 
-        identifier_normalized = identifier.lower().strip()
+        identifier_normalized = (
+            identifier.lower().strip()
+        )
 
         if (
             identifier_normalized in searchable
@@ -360,6 +570,7 @@ def _authority_score(
     ).lower()
 
     if requested_resolution:
+
         resolution_words = [
             word
             for word in re.findall(
@@ -393,7 +604,10 @@ def _authority_score(
         "youtube.com",
     )
 
-    if any(domain in link for domain in low_authority_domains):
+    if any(
+        domain in link
+        for domain in low_authority_domains
+    ):
         score -= 40
 
     low_authority_sources = (
@@ -405,7 +619,10 @@ def _authority_score(
         "blogspot",
     )
 
-    if any(source_name in source for source_name in low_authority_sources):
+    if any(
+        source_name in source
+        for source_name in low_authority_sources
+    ):
         score -= 20
 
     return score
@@ -419,7 +636,9 @@ def research_case(
     api_key = os.getenv("SERPAPI_API_KEY")
 
     if not api_key:
-        raise ValueError("Missing SERPAPI_API_KEY")
+        raise ValueError(
+            "Missing SERPAPI_API_KEY"
+        )
 
     case.status = CaseStatus.RESEARCHING
     db.commit()
@@ -436,28 +655,78 @@ def research_case(
     org = case.airline or case.organization
     org_lower = (org or "").lower()
 
-    # domain detection (reuse similar heuristics as query builder)
+    # ---------------------------------------------------------
+    # Domain detection
+    # ---------------------------------------------------------
     text_parts = []
+
     if case.title:
         text_parts.append(case.title)
+
     if case.description:
         text_parts.append(case.description)
+
     if case.requested_resolution:
         text_parts.append(case.requested_resolution)
+
     if case.supporting_facts:
         text_parts.append(case.supporting_facts)
 
-    text_blob = " ".join(text_parts).lower()
+    text_blob = " ".join(
+        text_parts
+    ).lower()
 
     def _detect_domain_from_blob() -> str | None:
-        if any(k in text_blob for k in ("insurance", "claim", "policy", "claimant", "policy number", "claim number")):
+
+        if any(
+            k in text_blob
+            for k in (
+                "insurance",
+                "claim",
+                "policy",
+                "claimant",
+                "policy number",
+                "claim number",
+            )
+        ):
             return "insurance"
-        if any(k in text_blob for k in ("flight", "airline", "passenger", "booking", "cancellation")):
+
+        if any(
+            k in text_blob
+            for k in (
+                "flight",
+                "airline",
+                "passenger",
+                "booking",
+                "cancellation",
+            )
+        ):
             return "flight"
-        if any(k in text_blob for k in ("bank", "transaction", "charge", "dispute", "account")):
+
+        if any(
+            k in text_blob
+            for k in (
+                "bank",
+                "transaction",
+                "charge",
+                "dispute",
+                "account",
+            )
+        ):
             return "bank"
-        if any(k in text_blob for k in ("rental", "lease", "deposit", "landlord", "tenancy")):
+
+        if any(
+            k in text_blob
+            for k in (
+                "rental",
+                "lease",
+                "deposit",
+                "landlord",
+                "tenancy",
+            )
+        ):
             return "rental"
+
         return None
 
     domain = _detect_domain_from_blob()
@@ -467,7 +736,6 @@ def research_case(
     # ---------------------------------------------------------
     # Search across multiple queries.
     #
-    # Important:
     # Do NOT stop after the first 5 raw results.
     # We need a larger candidate pool so authority ranking
     # can actually select the strongest sources.
@@ -475,6 +743,7 @@ def research_case(
     max_candidates = 30
 
     try:
+
         for query in queries:
 
             items = serpapi.search(
@@ -507,8 +776,13 @@ def research_case(
                     or item.get("url")
                 )
 
-                link_lower = (link or "").lower()
-                source_lower = (source or "").lower()
+                link_lower = (
+                    link or ""
+                ).lower()
+
+                source_lower = (
+                    source or ""
+                ).lower()
 
                 # -------------------------------------------------
                 # Initial relevance
@@ -528,16 +802,26 @@ def research_case(
                     relevance = "high"
 
                 else:
-                    # Prefer strong matches only when the organization appears
-                    # unambiguously in the link/title (e.g., organization domain)
+
+                    # Prefer strong matches when the
+                    # organization appears clearly.
                     org_words = [
                         word
-                        for word in re.findall(r"[a-z0-9]+", (org or "").lower())
+                        for word in re.findall(
+                            r"[a-z0-9]+",
+                            (org or "").lower(),
+                        )
                         if len(word) >= 3
                     ]
 
                     combined_search_text = (
-                        link_lower + " " + title.lower() + " " + source_lower + " " + (snippet or "").lower()
+                        link_lower
+                        + " "
+                        + title.lower()
+                        + " "
+                        + source_lower
+                        + " "
+                        + (snippet or "").lower()
                     )
 
                     matched_words = sum(
@@ -546,9 +830,16 @@ def research_case(
                         if word in combined_search_text
                     )
 
-                    # If the full normalized organization equals the normalized link, it's a strong match.
-                    if org and _normalize(org) and _normalize(org) == _normalize(link_lower):
+                    # If the full normalized organization equals
+                    # the normalized link, it's a strong match.
+                    if (
+                        org
+                        and _normalize(org)
+                        and _normalize(org)
+                        == _normalize(link_lower)
+                    ):
                         relevance = "high"
+
                     elif matched_words >= 2:
                         relevance = "high"
 
@@ -565,16 +856,27 @@ def research_case(
                         "europa.eu",
                     )
                 ):
+
                     why = (
-                        "This is an official government or regulatory source describing policy or guidance relevant to the issue."
+                        "This is an official government or "
+                        "regulatory source describing policy "
+                        "or guidance relevant to the issue."
                     )
 
-                elif org and _normalize(org) and (
-                    _normalize(org) == _normalize(link_lower)
-                    or matched_words >= 2
+                elif (
+                    org
+                    and _normalize(org)
+                    and (
+                        _normalize(org)
+                        == _normalize(link_lower)
+                        or matched_words >= 2
+                    )
                 ):
+
                     why = (
-                        "This source appears to be the organization's official policy or published guidance."
+                        "This source appears to be the "
+                        "organization's official policy or "
+                        "published guidance."
                     )
 
                 elif any(
@@ -594,16 +896,23 @@ def research_case(
                         "regulator",
                     )
                 ):
+
                     why = (
-                        "This source provides authoritative sector or consumer-protection guidance."
+                        "This source provides authoritative "
+                        "sector or consumer-protection guidance."
                     )
 
                 else:
+
                     why = (
-                        "This source provides contextual information that may be relevant to the case."
+                        "This source provides contextual "
+                        "information that may be relevant "
+                        "to the case."
                     )
 
-                summary = (snippet or "").strip()
+                summary = (
+                    snippet or ""
+                ).strip()
 
                 if summary:
                     summary = (
@@ -638,17 +947,27 @@ def research_case(
         for result in results:
 
             if result.url:
-                normalized_url = result.url.strip().lower()
+
+                normalized_url = (
+                    result.url.strip().lower()
+                )
 
                 if normalized_url in seen_urls:
                     continue
 
-                seen_urls.add(normalized_url)
+                seen_urls.add(
+                    normalized_url
+                )
 
             else:
+
                 pair = (
-                    (result.source or "").strip().lower(),
-                    (result.title or "").strip().lower(),
+                    (
+                        result.source or ""
+                    ).strip().lower(),
+                    (
+                        result.title or ""
+                    ).strip().lower(),
                 )
 
                 if pair in seen_pairs:
@@ -702,11 +1021,13 @@ def research_case(
         for existing_result in existing:
 
             if existing_result.url:
+
                 existing_urls.add(
                     existing_result.url.strip().lower()
                 )
 
             else:
+
                 existing_pairs.add(
                     (
                         (
@@ -734,7 +1055,9 @@ def research_case(
                 if normalized_url in existing_urls:
                     continue
 
-                existing_urls.add(normalized_url)
+                existing_urls.add(
+                    normalized_url
+                )
 
             else:
 
@@ -796,4 +1119,6 @@ def research_case(
 
         db.commit()
 
-        raise ValueError(str(exc)) from exc
+        raise ValueError(
+            str(exc)
+        ) from exc
