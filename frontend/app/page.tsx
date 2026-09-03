@@ -182,15 +182,13 @@ export default function Home() {
 
     const finalTitle = title.trim() || deriveTitle(cleanProblem);
 
-    const payload = {
+      const payload = {
       title: finalTitle,
       description: cleanProblem,
       organization: organization.trim() || null,
       amount: amount.trim() || null,
-      currency:
-        amount.trim() && !currency.trim()
-          ? "JPY"
-          : currency.trim() || null,
+      // Do NOT default currency to JPY; respect user's input or leave null
+      currency: currency.trim() || null,
     };
 
     setCreating(true);
@@ -326,7 +324,6 @@ export default function Home() {
             </div>
 
             <div className="flex h-9 w-9 items-center justify-center rounded-full border border-black/10 bg-white text-sm font-medium">
-              T
             </div>
           </div>
         </header>
