@@ -25,6 +25,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://onit-agent.vercel.app",
         "https://onit-murex.vercel.app",
         "https://onit-git-main-tanishkarao16s-projects.vercel.app",
     ],
