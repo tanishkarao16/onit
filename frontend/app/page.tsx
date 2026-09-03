@@ -422,7 +422,7 @@ export default function Home() {
                 </div>
               </div>
             </button>
-          ) : (
+                   ) : (
             <div className="rounded-2xl border border-black/8 bg-white p-8 text-center shadow-[0_8px_30px_rgba(0,0,0,0.03)]">
               <p className="text-sm font-medium">
                 {loading
@@ -437,8 +437,20 @@ export default function Home() {
                   ? "ONIT is connecting to your workspace."
                   : error
                     ? "Make sure the ONIT backend is running."
-                    : "Give ONIT a problem to work on."}
+                    : cases.length === 0
+                      ? "Your workspace is ready. Create your first case to get started."
+                      : "Give ONIT a problem to work on."}
               </p>
+
+              {!loading && !error && cases.length === 0 && (
+                <button
+                  type="button"
+                  onClick={openNewCase}
+                  className="mt-5 rounded-full bg-[#171717] px-5 py-2.5 text-sm font-medium text-white transition hover:bg-[#30302d]"
+                >
+                  + Create your first case
+                </button>
+              )}
             </div>
           )}
         </section>
@@ -496,27 +508,25 @@ export default function Home() {
                   Try again
                 </button>
               </div>
-            ) : filteredCases.length === 0 ? (
+                   ) : filteredCases.length === 0 ? (
               <div className="px-5 py-12 text-center">
                 <p className="text-sm font-medium">
-                  {search
-                    ? "No matching cases."
-                    : "No cases yet."}
+                  {search ? "No matching cases." : "No cases yet."}
                 </p>
 
                 <p className="mt-2 text-sm text-[#8a8a86]">
                   {search
                     ? "Try a different search."
-                    : "Give ONIT a problem to work on."}
+                    : "Your workspace is ready. Create your first case to get started."}
                 </p>
 
                 {!search && (
                   <button
                     type="button"
                     onClick={openNewCase}
-                    className="mt-5 rounded-full bg-[#171717] px-5 py-2.5 text-sm font-medium text-white"
+                    className="mt-5 rounded-full bg-[#171717] px-5 py-2.5 text-sm font-medium text-white transition hover:bg-[#30302d]"
                   >
-                    + New case
+                    + Create your first case
                   </button>
                 )}
               </div>
