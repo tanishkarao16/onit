@@ -1394,9 +1394,7 @@ const workflow = useMemo(() => {
               </p>
             </div>
 
-            <div className="flex h-9 w-9 items-center justify-center rounded-full border border-black/10 bg-white text-sm font-medium">
-              T
-            </div>
+           
           </div>
         </header>
 
