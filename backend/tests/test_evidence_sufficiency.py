@@ -1,7 +1,5 @@
 import json
 
-from sqlalchemy.orm import Session
-
 from app.services.case_parser import Case as ParsedCase
 from app.services.evidence_sufficiency import evaluate_evidence_sufficiency
 from app.services.case_persistence import persist_parsed_case
@@ -13,7 +11,10 @@ def test_evaluate_sufficient_fixture():
     with open("tests/fixtures/nutrient_response.json", encoding="utf-8") as f:
         resp = json.load(f)
 
-    parsed = __import__("app.services.case_parser", fromlist=["parse_case"]).parse_case(resp)
+    parsed = __import__(
+        "app.services.case_parser",
+        fromlist=["parse_case"],
+    ).parse_case(resp)
 
     suff = evaluate_evidence_sufficiency(parsed)
 
@@ -22,6 +23,12 @@ def test_evaluate_sufficient_fixture():
 
 
 def test_evaluate_insufficient():
+    """
+    A completely empty case should be rejected, but ONIT must not
+    require flight-specific fields such as booking_reference or
+    passenger for every case.
+    """
+
     parsed = ParsedCase(
         passenger=None,
         booking_reference=None,
@@ -35,14 +42,19 @@ def test_evaluate_insufficient():
     suff = evaluate_evidence_sufficiency(parsed)
 
     assert suff["needs_information"] is True
-    fields = [m["field"] for m in suff["missing_information"]]
-    assert "booking_reference" in fields
-    assert "passenger" in fields
-    assert "requested_resolution" in fields
+
+    fields = [
+        m["field"]
+        for m in suff["missing_information"]
+    ]
+
+    assert "case_details" in fields
+    assert "booking_reference" not in fields
+    assert "passenger" not in fields
 
 
 def test_needs_information_status_and_persistence(tmp_path):
-    # Create a parsed case with missing identity
+    # An empty case should remain NEEDS_INFORMATION.
     parsed = ParsedCase(
         passenger=None,
         booking_reference=None,
@@ -57,11 +69,9 @@ def test_needs_information_status_and_persistence(tmp_path):
 
     db = SessionLocal()
 
-    # persist into DB
     case = persist_parsed_case(db, parsed)
 
-    # Analyze; should set NEEDS_INFORMATION
-    decision = analyze_case(db, case)
+    analyze_case(db, case)
 
     db.refresh(case)
 
@@ -69,11 +79,23 @@ def test_needs_information_status_and_persistence(tmp_path):
     assert case.missing_information is not None
 
     miss = json.loads(case.missing_information)
+
     assert miss.get("needs_information") is True
-    assert isinstance(miss.get("missing_information"), list)
+    assert isinstance(
+        miss.get("missing_information"),
+        list,
+    )
 
 
 def test_missing_information_cleared_when_provided(tmp_path):
+    """
+    Once meaningful case information is supplied, ONIT should no
+    longer require the generic case_details field.
+
+    This deliberately uses generic information rather than relying
+    on flight-specific passenger/booking fields.
+    """
+
     parsed = ParsedCase(
         passenger=None,
         booking_reference=None,
@@ -90,29 +112,41 @@ def test_missing_information_cleared_when_provided(tmp_path):
 
     case = persist_parsed_case(db, parsed)
 
-    # Analyze -> needs info
+    # Initial analysis -> insufficient.
     analyze_case(db, case)
 
-    # Now simulate user providing booking_reference via new evidence merge
-    case.booking_reference = "BR123"
-    case.passenger = "Test Person"
+    db.refresh(case)
+
+    assert case.status == CaseStatus.NEEDS_INFORMATION
+
+    # Simulate the user providing meaningful case information.
+    case.description = (
+        "The service I paid for was cancelled and I have "
+        "not received the refund."
+    )
+    case.amount = "52800"
+
     db.commit()
     db.refresh(case)
 
-    # Re-run analyze; should now be EVIDENCE_READY or proceed
+    # Re-run analysis.
     decision = analyze_case(db, case)
 
     db.refresh(case)
 
     assert case.status != CaseStatus.NEEDS_INFORMATION
+    assert decision is not None
 
 
 def test_existing_flight_workflow_regression(tmp_path):
-    # Load full fixture and persist
+    # Existing flight fixture must continue to work.
     with open("tests/fixtures/nutrient_response.json", encoding="utf-8") as f:
         resp = json.load(f)
 
-    parsed = __import__("app.services.case_parser", fromlist=["parse_case"]).parse_case(resp)
+    parsed = __import__(
+        "app.services.case_parser",
+        fromlist=["parse_case"],
+    ).parse_case(resp)
 
     from app.db.database import SessionLocal
 
@@ -120,7 +154,6 @@ def test_existing_flight_workflow_regression(tmp_path):
 
     case = persist_parsed_case(db, parsed)
 
-    # Analyze should produce a decision and EVIDENCE_READY
     decision = analyze_case(db, case)
 
     db.refresh(case)

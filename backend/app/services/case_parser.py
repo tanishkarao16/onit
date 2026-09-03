@@ -20,6 +20,8 @@ class Case:
     refund_received: bool | None = None
     requested_resolution: str | None = None
     supporting_facts: list[str] | None = None
+    # Generic facts mapping (normalized key -> value) to support domain-agnostic analysis
+    facts: dict[str, str] | None = None
 
 
 def _elements(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -204,28 +206,34 @@ def _normalize_amount(
 
     original = text
 
-    normalized = (
-        text
-        .replace("\u00A5", "Y")
-        .replace("¥", "Y")
-        .strip()
-    )
+    # Normalize common currency symbols and codes to identify currency
+    normalized = text.strip()
 
     currency = None
 
-    if "JPY" in normalized.upper():
+    # Map symbols to currency codes. Default for '¥' is JPY (prefer JPY for Yen symbol).
+    if re.search(r"\bJPY\b", normalized, re.IGNORECASE):
         currency = "JPY"
-
-    elif "Y" in normalized.upper():
+    elif "\uFFE5" in normalized or "\uffe5" in normalized:
         currency = "JPY"
-
-    elif "¥" in original:
+    elif "\u00A5" in normalized or "¥" in normalized or "￥" in normalized:
         currency = "JPY"
+    elif re.search(r"\bUSD\b", normalized, re.IGNORECASE) or "$" in normalized:
+        currency = "USD"
+    elif re.search(r"\bEUR\b", normalized, re.IGNORECASE) or "€" in normalized:
+        currency = "EUR"
+    elif re.search(r"\bGBP\b", normalized, re.IGNORECASE) or "£" in normalized:
+        currency = "GBP"
 
-    match = re.search(
-        r"\d[\d,]*(?:\.\d+)?",
-        normalized,
-    )
+    # Try to find an explicit 3-letter currency code anywhere
+    code_match = re.search(r"\b([A-Z]{3})\b", normalized.upper())
+    if code_match:
+        code = code_match.group(1).upper()
+        # prefer explicit code when detected
+        currency = code
+
+    # Extract numeric amount (allow commas and decimals)
+    match = re.search(r"[\d,]+(?:\.\d+)?", normalized)
 
     if not match:
         return None, currency
@@ -360,6 +368,20 @@ def parse_case(
 
     # Build a fallback flattened text once for regex-based lookups
     text = _all_text(response)
+
+    # Build generic facts mapping from KV pairs
+    facts: dict[str, str] = {}
+    for item in kvs:
+        k = item.get("key")
+        v = item.get("value")
+        if not k or not v:
+            continue
+        # normalize key to snake_case-like identifier
+        nk = re.sub(r"[^a-z0-9]+", "_", k.strip().lower()).strip("_")
+        if nk:
+            # prefer first-seen value for a given normalized key
+            if nk not in facts:
+                facts[nk] = v
 
     # --------------------------------------------------------
     # PASSENGER
@@ -528,4 +550,5 @@ def parse_case(
         refund_received=refund_received,
         requested_resolution=requested_resolution,
         supporting_facts=supporting_facts,
+        facts=facts or None,
     )

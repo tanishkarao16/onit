@@ -130,151 +130,151 @@ def decide_case(case: Case) -> CaseDecision:
     )
 
     # ========================================================
-    # FLIGHT / AIRLINE REFUND
+    # DOMAIN DETECTION + DECISION
     # ========================================================
 
-    cancellation_keywords = [
-        "cancelled",
-        "canceled",
-        "cancellation",
-        "flight cancellation",
-        "flight was cancelled",
-        "flight was canceled",
-        "airline cancelled",
-        "airline canceled",
-    ]
+    # Domain-specific keyword groups
+    domains = {
+        "insurance": [
+            "insurance",
+            "claim",
+            "policy",
+            "denied",
+            "denial",
+            "claimant",
+            "policy number",
+            "claim number",
+        ],
+        "flight": [
+            "flight",
+            "airline",
+            "airways",
+            "booking",
+            "passenger",
+            "cancellation",
+        ],
+        "bank": [
+            "bank",
+            "transaction",
+            "dispute",
+            "account",
+            "charge",
+        ],
+        "rental": [
+            "tenancy",
+            "deposit",
+            "landlord",
+            "rental",
+            "lease",
+        ],
+    }
 
-    refund_keywords = [
-        "refund",
-        "refunded",
-        "money back",
-        "reimbursement",
-        "reimburse",
-    ]
+    def detect_domain(text: str) -> str | None:
+        for name, keys in domains.items():
+            if _contains_any(text, keys):
+                return name
+        return None
 
-    flight_keywords = [
-        "flight",
-        "airline",
-        "airways",
-        "airway",
-        "airport",
-        "booking",
-        "passenger",
-    ]
+    domain = detect_domain(searchable_text)
 
-    is_cancellation = (
-        _contains_any(
-            searchable_text,
-            cancellation_keywords,
+    # Insurance claim handling
+    if domain == "insurance":
+        # Determine if denial present
+        denied = _contains_any(searchable_text, ["denied", "denial", "was denied", "not covered"]) or ("denied" in description)
+
+        issue_text = (
+            requested_resolution
+            or description
+            or supporting_facts
+            or "Insurance claim"
         )
-        or bool(cancellation_date)
-    )
 
-    is_refund_issue = _contains_any(
-        searchable_text,
-        refund_keywords,
-    )
-
-    is_flight_case = (
-        _contains_any(
-            searchable_text,
-            flight_keywords,
+        recommended = (
+            "Review the policy terms, the denial reason, and prepare a reconsideration or escalation package. "
+            "Include policy references and claim identifiers when contacting the insurer."
         )
-        or bool(airline)
-        or bool(flight_number)
-        or bool(booking_reference)
-        or bool(cancellation_date)
-    )
 
-    # ========================================================
-    # CANCELLED FLIGHT + REFUND NOT RECEIVED
-    # ========================================================
+        priority = "medium"
 
-    if (
-        is_cancellation
-        and is_refund_issue
-        and is_flight_case
-    ):
+        reason = (
+            "The case contains insurance claim indicators"
+            + (" and appears to be a denial." if denied else ".")
+        )
 
-        if refund_received is True:
+        return CaseDecision(
+            issue=(
+                "Insurance claim denial" if denied else "Insurance claim"
+            ),
+            recommended_action=recommended,
+            priority=priority,
+            reason=reason,
+        )
+
+    # Bank/payment related cases
+    if domain == "bank":
+        return CaseDecision(
+            issue="Payment or bank dispute",
+            recommended_action=(
+                "Review the transaction and account details, gather bank statements, "
+                "and prepare a dispute or chargeback request if appropriate."
+            ),
+            priority="medium",
+            reason=(
+                "The case contains banking or payment-related terms requiring financial dispute handling."
+            ),
+        )
+
+    # Flight-specific cases (keep existing behavior but only when flight indicators are strong)
+    if domain == "flight":
+        # reuse previous cancellation/refund heuristics but scoped to flight domain
+        cancellation_keywords = [
+            "cancelled",
+            "canceled",
+            "cancellation",
+        ]
+
+        refund_keywords = [
+            "refund",
+            "refunded",
+            "money back",
+            "reimbursement",
+            "reimburse",
+        ]
+
+        is_cancellation = (
+            _contains_any(searchable_text, cancellation_keywords)
+            or bool(cancellation_date)
+        )
+
+        is_refund_issue = _contains_any(searchable_text, refund_keywords)
+
+        if is_cancellation and is_refund_issue:
+            if refund_received is True:
+                return CaseDecision(
+                    issue="Flight cancellation refund",
+                    recommended_action=(
+                        "Verify the refund amount and confirm that the passenger received the expected refund."
+                    ),
+                    priority="medium",
+                    reason=(
+                        "The case concerns a cancelled flight and indicates that a refund was received."
+                    ),
+                )
+
+            amount_text = f" for {amount}" if amount else ""
 
             return CaseDecision(
-                issue="Flight cancellation refund",
+                issue="Cancelled flight with refund not received",
                 recommended_action=(
-                    "Verify the refund amount and "
-                    "confirm that the passenger received "
-                    "the expected refund."
+                    "Verify the passenger's refund eligibility, contact the airline to request the applicable refund, "
+                    "and follow up until a response is received."
                 ),
-                priority="medium",
+                priority="high",
                 reason=(
-                    "The case concerns a cancelled flight "
-                    "and indicates that a refund was received."
+                    "The available case information indicates that a flight was cancelled and the passenger has not received the expected refund"
+                    f"{amount_text}."
                 ),
             )
-
-        amount_text = (
-            f" for {amount}"
-            if amount
-            else ""
-        )
-
-        return CaseDecision(
-            issue="Cancelled flight with refund not received",
-            recommended_action=(
-                (
-    "Verify the passenger's refund eligibility, "
-    "contact the airline to request the applicable "
-    "refund, and follow up until a response is received."
-)
-            ),
-            priority="high",
-            reason=(
-                "The available case information indicates "
-                f"that a flight was cancelled and the passenger "
-                f"has not received the expected refund{amount_text}."
-            ),
-        )
-
-    # ========================================================
-    # GENERIC REFUND
-    # ========================================================
-
-    if is_refund_issue:
-
-        return CaseDecision(
-            issue="Refund request",
-            recommended_action=(
-                "Verify the refund eligibility and "
-                "research the applicable refund policy "
-                "before preparing the next action."
-            ),
-            priority="medium",
-            reason=(
-                "The case contains a refund-related request, "
-                "but the available information does not "
-                "identify a more specific automated workflow."
-            ),
-        )
-
-    # ========================================================
-    # CANCELLATION WITHOUT REFUND
-    # ========================================================
-
-    if is_cancellation:
-
-        return CaseDecision(
-            issue="Cancellation-related case",
-            recommended_action=(
-                "Review the cancellation circumstances "
-                "and determine the applicable remedy."
-            ),
-            priority="medium",
-            reason=(
-                "The case describes a cancellation, "
-                "but does not contain enough information "
-                "to identify a specific remedy automatically."
-            ),
-        )
 
     # ========================================================
     # PAYMENT / CHARGE
